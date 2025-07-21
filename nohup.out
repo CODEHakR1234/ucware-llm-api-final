@@ -1,0 +1,22 @@
+INFO:     Will watch for changes in these directories: ['/home/skku-ucware/workspace/PDF_Summarizer']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [1466407] using WatchFiles
+INFO:     Started server process [1466409]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1466409]
+INFO:     Stopping reloader process [1466407]
+INFO:     Will watch for changes in these directories: ['/home/skku-ucware/workspace/PDF_Summarizer']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [1466756] using WatchFiles
+INFO:     Started server process [1466758]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1466758]
+INFO:     Stopping reloader process [1466756]
