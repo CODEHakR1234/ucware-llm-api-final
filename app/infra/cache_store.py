@@ -26,6 +26,11 @@ class CacheStore(CacheIF):
 
     def exists_summary(self, key: str) -> bool:
         return self.cache.exists_pdf(key)
+
+    def set_log(self, file_id: str, url: str, query: str, lang: str, msg: str):
+        """PDF 처리 단계별 로그를 Redis(HSET) 에 기록한다."""
+        self.cache.set_log(file_id, url, query, lang, msg)
+
 # -------------------------------
 # ✅ FastAPI Depends용 provider
 # -------------------------------

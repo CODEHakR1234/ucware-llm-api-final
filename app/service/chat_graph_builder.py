@@ -104,6 +104,7 @@ class ChatGraphBuilder:
 
         @safe_retry
         async def refine(st: ChatState):
+            docs = "\n".join(st.messages)
             prompt = (
                 "You are a helpful assistant. Using the following chat history, refine the answer."
                 "### Question:\n{query}\n\n"

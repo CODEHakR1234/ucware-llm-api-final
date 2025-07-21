@@ -6,12 +6,22 @@
 """
 from __future__ import annotations
 
+import time
 import asyncio
 from functools import wraps
 from typing import Awaitable, Callable, List, Optional
 
 from langgraph.graph import StateGraph
-from pydantic import BaseModel
+from pydantic import BaseModel, Field 
+
+from app.prompts import (
+    PROMPT_DETERMINE_WEB,
+    PROMPT_GRADE,
+    PROMPT_GENERATE,
+    PROMPT_VERIFY,
+    PROMPT_REFINE,
+    PROMPT_TRANSLATE,
+)
 
 from app.domain.interfaces import (
     CacheIF,
@@ -36,7 +46,7 @@ class SummaryState(BaseModel):
     summary: Optional[str] = None
     answer:  Optional[str] = None
     
-    log : Optional[List[str]] = [] # 임시 테스트용 로그
+    log: List[str] = Field(default_factory=list)
 
     cached: bool = False
     embedded: bool = False
@@ -61,8 +71,13 @@ def safe_retry(fn: Callable[[SummaryState], Awaitable[SummaryState]]):
     async def _wrap(st: SummaryState):  # type: ignore[override]
         for attempt in range(1, _RETRY + 1):
             try:
-                st.log.append(f"{fn.__name__} attempt {attempt}")
-                return await fn(st)
+                t0 = time.perf_counter()
+                result = await fn(st)
+                elapsed = int((time.perf_counter() - t0) * 1000)  # ms
+                st.log.append(
+                    f"{fn.__name__} attempt {attempt} [{elapsed}ms]"
+                )
+                return result
             except Exception as exc:  # noqa: BLE001
                 if attempt == _RETRY:
                     st.error = f"{fn.__name__} failed after {_RETRY} tries: {exc}"
@@ -92,12 +107,21 @@ class SummaryGraphBuilder:
         g = StateGraph(SummaryState)
 
         # 0. Entry ------------------------------------------------------
+        @safe_retry
         async def entry_router(st: SummaryState):
             st.is_summary = st.query.strip().upper() == "SUMMARY_ALL"
             st.cached = self.cache.exists_summary(st.file_id)
             if st.cached:
                 st.summary = self.cache.get_summary(st.file_id)
             st.embedded = await self.store.has_chunks(st.file_id)  # type: ignore[arg-type]
+            
+            try:
+                self.cache.set_log(
+                    st.file_id, st.url, st.query, st.lang, msg="entry"
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"[LOG] entry set_log 실패: {e}")
+
             return st
 
         def entry_branch(st: SummaryState) -> str:
@@ -150,14 +174,7 @@ class SummaryGraphBuilder:
                 st.chunks = await self.store.get_all(st.file_id)
                 st.summary = await self.llm.summarize(st.chunks)
                 
-            prompt = """
-                You are a helpful assistant that can determine if the answer of the query need extra information from the web.
-                If the answer need extra information from the web, return 'true'.
-                If the answer does not need extra information from the web, return 'false'.
-                Query: {query}
-                Summary: {summary}
-                """
-            prompt = prompt.format(query=st.query, summary=st.summary)
+            prompt = PROMPT_DETERMINE_WEB.render(query=st.query, summary=st.summary)
             result = await self.llm.execute(prompt)
             
             st.is_web = "true" in result.lower()
@@ -228,20 +245,13 @@ class SummaryGraphBuilder:
             # 요약된 본문, Retrieved된 결과를 보고 문맥상 필요한지 확인
             # 필요하다면 추가적인 정보를 찾아야 한다면 'true'를 반환
             # 필요하지 않다면 'false'를 반환
+            if not st.retrieved:
+                st.error = "No relevant chunks"
+                return st
             
             good_chunks = []
             for chunk in st.retrieved:
-                prompt = """
-                You are a grader assessing relevance of a retrieved document to a user question. \n 
-                If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant. \n
-                It does not need to be a stringent test. The goal is to filter out erroneous retrievals. \n
-                Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question.\n
-                YOU MUST RETURN ONLY 'yes' or 'no'.\n
-                Query: {query}\n
-                Summary: {summary}\n
-                Retrieved: {chunk}\n
-                """
-                prompt = prompt.format(query=st.query, summary=st.summary, chunk=chunk)
+                prompt = PROMPT_GRADE.render(query=st.query, summary=st.summary, chunk=chunk)
                 result = await self.llm.execute(prompt)
                 if "yes" in result.lower():
                     good_chunks.append(chunk)
@@ -264,14 +274,7 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def generate(st: SummaryState):
-            prompt = """
-            You are a helpful assistant that can generate a answer of the query in English.
-            Use the retrieved information to generate the answer.
-            YOU MUST RETURN ONLY THE ANSWER, NOTHING ELSE.
-            Query: {query}
-            Retrieved: {retrieved}
-            """
-            prompt = prompt.format(query=st.query, retrieved=st.retrieved)
+            prompt = PROMPT_GENERATE.render(query=st.query, retrieved=st.retrieved)
             st.answer = await self.llm.execute(prompt)
             return st
         
@@ -293,22 +296,12 @@ class SummaryGraphBuilder:
             # 3. 생성된 답변이 논리적으로 일관성이 있는가?
             # 4. 생성된 답변이 완전하고 구체적인가?
             
-            prompt = """
-            You are a helpful assistant that can verify the quality of the generated answer.
-            Please evaluate the answer based on the following criteria:
-            1. Does the answer directly address the query?
-            2. Is the answer based on the retrieved information?
-            3. Is the answer logically consistent?
-            4. Is the answer complete and specific?
-            
-            Query: {query}
-            Summary: {summary}
-            Retrieved Information: {retrieved}
-            Generated Answer: {answer}
-            
-            Return 'good' if the answer meets all criteria, otherwise return 'bad'. Do not return anything else.
-            """
-            prompt = prompt.format(query=st.query, summary=st.summary, retrieved=st.retrieved, answer=st.answer)
+            prompt = PROMPT_VERIFY.render(
+                query=st.query,
+                summary=st.summary,
+                retrieved=st.retrieved,
+                answer=st.answer,
+            )
             result = await self.llm.execute(prompt)
             st.is_good = "good" in result.lower()
             return st
@@ -331,17 +324,8 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def refine(st: SummaryState):
-            prompt = """
-            You are a helpful assistant that can do two things:
-            1. If the query is not related to the document content, return ONLY this sentence: "I'm sorry, I can't find the answer to your question even though I read all the documents. Please ask a question about the document's content."
-            2. If the query is related, refine the query to get more relevant and accurate information based on the document summary and retrieved information. Return ONLY the refined query, nothing else.
-
-            Document Summary: {summary}
-            Original Query: {query}
-            Retrieved Information: {retrieved}
-            Generated Answer: {answer}
-            """
-            prompt = prompt.format(
+            
+            prompt = PROMPT_REFINE.render(
                 summary=st.summary,
                 query=st.query,
                 retrieved=st.retrieved,
@@ -372,6 +356,7 @@ class SummaryGraphBuilder:
         })
         
         # 5. Save summary ----------------------------------------------
+        @safe_retry
         async def save_summary(st: SummaryState):
             if st.is_summary and not st.cached and st.summary:
                 self.cache.set_summary(st.file_id, st.summary)
@@ -379,25 +364,36 @@ class SummaryGraphBuilder:
 
         g.add_node("save", save_summary)
 
+        def post_save_summary(st: SummaryState) -> str:
+            return "finish" if st.error else "translate"
+
         @safe_retry
         async def translate(st: SummaryState):
-            if st.is_summary:
-                st.answer = self.cache.get_summary(st.file_id)
             
-            prompt = """
-            You are a helpful assistant that can translate the answer to User language.\n
-            ONLY RETURN THE TRANSLATED SEQUENCE, NOTHING ELSE.\n
-            User language: {lang}\n
-            Answer: {answer}\n
-            """
-            prompt = prompt.format(lang=st.lang, answer=st.answer)
+            if st.is_summary:
+                text = self.cache.get_summary(st.file_id)
+            else:
+                text = st.answer
+
+            prompt = PROMPT_TRANSLATE.render(lang=st.lang, text=text)
             st.answer = await self.llm.execute(prompt)
             return st
 
 
         # 6. Translate & finish ----------------------------------------
         g.add_node("translate", translate)
-        g.add_node("finish",    lambda st: st)
+        async def finish_node(st: SummaryState):
+            # 에러가 있으면 에러 메시지를, 없으면 실행 로그를 문자열로 묶어서 기록
+            msg = st.error if st.error else " | ".join(st.log or [])
+            try:
+                self.cache.set_log(
+                    st.file_id, st.url, st.query, st.lang, msg=msg
+                )
+            except Exception as e:  # noqa: BLE001
+                print(f"[LOG] finish set_log 실패: {e}")
+            return st
+
+        g.add_node("finish", finish_node)
 
         # Routing -------------------------------------------------------
         g.set_entry_point("entry")
@@ -426,7 +422,17 @@ class SummaryGraphBuilder:
         })
 
         g.add_edge("summarize",  "save")
-        g.add_edge("save",       "translate")
+        
+        # --- save 노드 → translate / finish 분기 --------------------
+        g.add_conditional_edges(
+            "save",
+            post_save_summary,
+            {
+                "translate": "translate",
+                "finish": "finish",
+            },
+        )
+
         g.add_edge("translate",  "finish")
 
         g.set_finish_point("finish")
