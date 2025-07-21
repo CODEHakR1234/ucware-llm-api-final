@@ -93,7 +93,7 @@ class RedisCacheDB:
         # 3. 날짜별 HSET에도 TTL 설정 (8일로 설정해서 여유 확보)
         self.r.expire(date_key, (self.ttl_days + 1) * 86400)
 
-    def set_log(self, file_id: str, url: str, query: str, lang: str):
+    def set_log(self, file_id: str, url: str, query: str, lang: str, msg: str):
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
         timestamp = now.strftime("%H:%M:%S")
@@ -104,7 +104,8 @@ class RedisCacheDB:
             "url": url,
             "query": query,
             "lang": lang,
-            "time": timestamp
+            "time": timestamp,
+            "msg": msg
         }
         self.r.hset(log_key, now.strftime("%Y-%m-%d %H:%M:%S"), json.dumps(log_value))
 

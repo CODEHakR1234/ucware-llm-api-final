@@ -31,5 +31,6 @@ redis>=5.0.0
 
 httpx[http2]  # httpx 비동기 클라이언트
 
+Jinja2>=3.0
 # ───────── Tavily Search API ─────────
 tavily-python
