@@ -13,6 +13,7 @@ echo "[3] pip 패키지 설치"
 pip install --upgrade pip
 pip install -r requirements.txt
 
+
 echo "🤖 사용할 LLM/Embedding Provider를 선택하세요:"
 echo "1. openai"
 echo "2. hf (HuggingFace)"
@@ -23,9 +24,12 @@ read -r TAVILY_API_KEY
 
 if [ "$PROVIDER_CHOICE" == "2" ]; then
     LLM_PROVIDER="hf"
-    EMBEDDING_MODEL_NAME="sentence-transformers/all-MiniLM-L6-v2"
-    LLM_MODEL_NAME="google/gemma-7b-it"
+    EMBEDDING_MODEL_NAME="BAAI/bge-m3"
+    LLM_MODEL_NAME="Qwen/Qwen3-30B-A3B-GPTQ-Int4"
     OPENAI_API_KEY=""
+    GPU_NUMBER=0
+    echo -n "사용할 GPU 번호를 입력하세요: (기본값 0)"
+    read -r GPU_NUMBER
 else
     LLM_PROVIDER="openai"
     EMBEDDING_MODEL_NAME="text-embedding-ada-002"
@@ -48,6 +52,7 @@ EMBEDDING_MODEL_NAME=$EMBEDDING_MODEL_NAME
 LLM_MODEL_NAME=$LLM_MODEL_NAME
 OPENAI_API_KEY="$OPENAI_API_KEY"
 TAVILY_API_KEY="$TAVILY_API_KEY"
+CUDA_VISIBLE_DEVICES=$GPU_NUMBER
 EOF
 
 echo "[✔] .env 생성 완료"

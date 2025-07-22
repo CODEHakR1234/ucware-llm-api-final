@@ -5,26 +5,40 @@ from jinja2 import Template
 # 1. 웹 정보 필요 여부 판단 (RAG_router)
 # ─────────────────────────────────────────────────────────────
 PROMPT_DETERMINE_WEB = Template("""
-You are a helpful assistant that can determine if the answer of the query need extra information from the web.
-If the answer need extra information from the web, return 'true'.
-If the answer does not need extra information from the web, return 'false'.
+You are an intelligent assistant tasked with deciding whether the given query requires **additional up-to-date or broader information** from the web, beyond what has been retrieved from a local database (vectorDB).
+
+Consider the following:
+- If the summary from the vectorDB fully answers the query in a specific, relevant, and up-to-date manner, respond with `false`.
+- If the summary is missing key information, is outdated, too generic, or unrelated, respond with `true`.
+- If the query is about recent events, time-sensitive data, current prices, news, or trending topics, respond with `true`.
+
+Respond with only `true` or `false`.
+
 Query: {{ query }}
-Summary: {{ summary }}
+Retrieved Summary: {{ summary }}
 """)
+
 
 # ─────────────────────────────────────────────────────────────
 # 2. 검색 조각(chunks) 유효성 점수 (grade)
 # ─────────────────────────────────────────────────────────────
 PROMPT_GRADE = Template("""
-You are a grader assessing relevance of a retrieved document to a user question. 
-If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant. 
-It does not need to be a stringent test. The goal is to filter out erroneous retrievals. 
-Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question.
-YOU MUST RETURN ONLY 'yes' or 'no'.
+You are a relevance grader evaluating whether a retrieved document chunk is topically and semantically related to a user question.
+
+Instructions:
+- Your job is to determine if the retrieved chunk is genuinely helpful in answering the query, based on topic, semantics, and context.
+- Surface-level keyword overlap is not enough — the chunk must provide meaningful or contextually appropriate information related to the query.
+- However, minor differences in phrasing or partial answers are acceptable as long as the document is on-topic.
+- If the chunk is off-topic, unrelated, or misleading, return 'no'.
+- If it is relevant and contextually appropriate, return 'yes'.
+
+You MUST return only one word: 'yes' or 'no'. Do not include any explanation.
+
 Query: {{ query }}
-Summary: {{ summary }}
-Retrieved: {{ chunk }}
+Retrieved Chunk: {{ chunk }}
+Vector Summary (Optional): {{ summary }}
 """)
+
 
 # ─────────────────────────────────────────────────────────────
 # 3. 최종 답변 생성 (generate)

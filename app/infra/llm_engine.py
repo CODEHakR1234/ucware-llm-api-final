@@ -29,7 +29,7 @@ from app.domain.interfaces import LlmChainIF, TextChunk
 class LlmEngine(LlmChainIF):
     """Concrete implementation of :class:`LlmChainIF`."""
 
-    def __init__(self, *, temperature: float = 0.3):
+    def __init__(self, *, temperature: float = 0.7):
         # Shared LLM instance
         self.llm = get_llm_instance(temperature=temperature)
 
@@ -50,13 +50,15 @@ class LlmEngine(LlmChainIF):
     # ------------------------------------------------------------------
     # LlmChainIF implementation
     # ------------------------------------------------------------------
-    async def execute(self, prompt: str) -> str:  # noqa: D401
+    async def execute(self, prompt: str, think: bool = False) -> str:  # noqa: D401
         """LLM call with a fully‑formatted *prompt* string."""
+        if not think:
+            prompt = prompt + "/no_think"
         return (await self._qa_chain.ainvoke(prompt)).strip()
 
     async def summarize(self, docs: List[TextChunk]) -> str:  # noqa: D401
         """High‑level summary using map‑reduce over *docs*."""
-        lc_docs = [Document(page_content=t) for t in docs]
+        lc_docs = [Document(page_content=t + "/no_think") for t in docs]
         # ``ainvoke`` returns the final summary string when
         # ``return_intermediate_steps=False``.
         result = await self._summ_chain.ainvoke({"input_documents": lc_docs})

@@ -168,6 +168,9 @@ class SummaryGraphBuilder:
         # 3-Q. Retrieve -------------------------------------------------
         @safe_retry
         async def RAG_router(st: SummaryState):
+            if st.is_summary:
+                return st
+            
             if st.cached:
                 st.summary = self.cache.get_summary(st.file_id)
             else:
@@ -176,7 +179,7 @@ class SummaryGraphBuilder:
                 
             prompt = PROMPT_DETERMINE_WEB.render(query=st.query, summary=st.summary)
             result = await self.llm.execute(prompt)
-            
+            st.log.append(f"RAG_router: {result}")
             st.is_web = "true" in result.lower()
             
             return st
@@ -253,6 +256,7 @@ class SummaryGraphBuilder:
             for chunk in st.retrieved:
                 prompt = PROMPT_GRADE.render(query=st.query, summary=st.summary, chunk=chunk)
                 result = await self.llm.execute(prompt)
+                st.log.append(f"grade: {result}")
                 if "yes" in result.lower():
                     good_chunks.append(chunk)
             
@@ -276,6 +280,7 @@ class SummaryGraphBuilder:
         async def generate(st: SummaryState):
             prompt = PROMPT_GENERATE.render(query=st.query, retrieved=st.retrieved)
             st.answer = await self.llm.execute(prompt)
+            st.log.append(f"generate: {st.answer}")
             return st
         
         g.add_node("generate", generate)
@@ -303,6 +308,7 @@ class SummaryGraphBuilder:
                 answer=st.answer,
             )
             result = await self.llm.execute(prompt)
+            st.log.append(f"verify: {result}")
             st.is_good = "good" in result.lower()
             return st
         
@@ -332,6 +338,7 @@ class SummaryGraphBuilder:
                 answer=st.answer
             )
             result = await self.llm.execute(prompt)
+            st.log.append(f"refine: {result}")
             # 관련 없는 경우
             if "not related to the document content" in result:
                 st.answer = result
@@ -377,6 +384,7 @@ class SummaryGraphBuilder:
 
             prompt = PROMPT_TRANSLATE.render(lang=st.lang, text=text)
             st.answer = await self.llm.execute(prompt)
+            st.log.append(f"translate: {st.answer}")
             return st
 
 
