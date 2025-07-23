@@ -56,6 +56,7 @@ class SummaryState(BaseModel):
     is_web: Optional[bool] = None
     is_good: Optional[bool] = None
 
+    refine_count: int = 0
 
 # ---------------------------------------------------------------------------
 # Helper: safe-retry decorator
@@ -161,6 +162,7 @@ class SummaryGraphBuilder:
             if st.chunks is None:
                 st.chunks = await self.store.get_all(st.file_id)  # type: ignore[arg-type]
             st.summary = await self.llm.summarize(st.chunks)  # type: ignore[arg-type]
+            st.log.append(f"summarize: {st.summary}")   
             return st
 
         g.add_node("summarize", summarize)
@@ -178,7 +180,7 @@ class SummaryGraphBuilder:
                 st.summary = await self.llm.summarize(st.chunks)
                 
             prompt = PROMPT_DETERMINE_WEB.render(query=st.query, summary=st.summary)
-            result = await self.llm.execute(prompt)
+            result = await self.llm.execute(prompt, think=True)
             st.log.append(f"RAG_router: {result}")
             st.is_web = "true" in result.lower()
             
@@ -209,6 +211,8 @@ class SummaryGraphBuilder:
             search_result, vector_result = await asyncio.gather(search_task, vector_task)
             
             st.retrieved = vector_result + search_result
+            
+            st.log.append(f"search_result: {search_result}")
             
             return st
         
@@ -255,23 +259,29 @@ class SummaryGraphBuilder:
             good_chunks = []
             for chunk in st.retrieved:
                 prompt = PROMPT_GRADE.render(query=st.query, summary=st.summary, chunk=chunk)
-                result = await self.llm.execute(prompt)
+                result = await self.llm.execute(prompt, think=True)
                 st.log.append(f"grade: {result}")
                 if "yes" in result.lower():
                     good_chunks.append(chunk)
             
+            if len(good_chunks) == 0:
+                st.answer = "I'm sorry, I can't find the answer to your question even though I read all the documents. Please ask a question about the document's content."
+                return st
             st.retrieved = good_chunks
             return st
         
         g.add_node("grade", grade)
         
         def post_grade(st: SummaryState) -> str:
+            if st.answer == "I'm sorry, I can't find the answer to your question even though I read all the documents. Please ask a question about the document's content.":
+                return "translate"
             if st.error:
                 return "finish"
             else:
                 return "generate"
         
         g.add_conditional_edges("grade", post_grade, {
+            "translate": "translate",
             "generate": "generate",
             "finish": "finish",
         })
@@ -307,7 +317,7 @@ class SummaryGraphBuilder:
                 retrieved=st.retrieved,
                 answer=st.answer,
             )
-            result = await self.llm.execute(prompt)
+            result = await self.llm.execute(prompt, think=True)
             st.log.append(f"verify: {result}")
             st.is_good = "good" in result.lower()
             return st
@@ -330,6 +340,10 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def refine(st: SummaryState):
+            st.refine_count += 1
+            if st.refine_count > 3:
+                st.answer = "I'm sorry, I can't find the answer to your question even though I read all the documents. Please ask a question about the document's content."
+                return st
             
             prompt = PROMPT_REFINE.render(
                 summary=st.summary,
@@ -352,7 +366,7 @@ class SummaryGraphBuilder:
         def post_refine(st: SummaryState) -> str:
             if st.error:
                 return "finish"
-            if "not related to the document content" in st.answer:
+            if "not related to the document content" in st.answer or st.refine_count > 3:
                 return "translate"
             else:
                 return "RAG_router"

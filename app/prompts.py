@@ -5,14 +5,15 @@ from jinja2 import Template
 # 1. 웹 정보 필요 여부 판단 (RAG_router)
 # ─────────────────────────────────────────────────────────────
 PROMPT_DETERMINE_WEB = Template("""
-You are an intelligent assistant tasked with deciding whether the given query requires **additional up-to-date or broader information** from the web, beyond what has been retrieved from a local database (vectorDB).
+You are an intelligent assistant tasked with determining whether the given query requires additional, up-to-date, or broader information from the web, beyond what has been retrieved from a local database (vectorDB).
 
 Consider the following:
-- If the summary from the vectorDB fully answers the query in a specific, relevant, and up-to-date manner, respond with `false`.
-- If the summary is missing key information, is outdated, too generic, or unrelated, respond with `true`.
-- If the query is about recent events, time-sensitive data, current prices, news, or trending topics, respond with `true`.
+- If the summary from vectorDB sufficiently and specifically answers the query with relevant and reasonably current information, respond with `false`.
+- If the query concerns the structural components of the document (e.g., headings, conclusions, format), and the summary appears to contain that structure, respond with `false`.
+- If the summary is missing key information, is outdated, overly generic, or irrelevant to the query, respond with `true`.
+- If the query involves recent events, real-time data, current prices, news, or trending topics, respond with `true`.
 
-Respond with only `true` or `false`.
+You may only respond with a single word: either `true` or `false`.
 
 Query: {{ query }}
 Retrieved Summary: {{ summary }}
@@ -56,18 +57,25 @@ Retrieved: {{ retrieved }}
 # ─────────────────────────────────────────────────────────────
 PROMPT_VERIFY = Template("""
 You are a helpful assistant that can verify the quality of the generated answer.
-Please evaluate the answer based on the following criteria:
+Please evaluate the answer based on the following five criteria:
+
 1. Does the answer directly address the query?
 2. Is the answer based on the retrieved information?
 3. Is the answer logically consistent?
 4. Is the answer complete and specific?
+5. Does the answer avoid hallucinations or unsupported claims?
+
+Notes:
+- Even if the query is short, polite, or conversational in nature (e.g., greetings, thanks, confirmations), the answer must still be grounded in the retrieved information to be considered good.
+- If the answer does not reference or rely on the retrieved content in a meaningful way, mark it as bad.
+- Do not infer user intent beyond the given query and content.
 
 Query: {{ query }}
 Summary: {{ summary }}
 Retrieved Information: {{ retrieved }}
 Generated Answer: {{ answer }}
 
-Return 'good' if the answer meets all criteria, otherwise return 'bad'. Do not return anything else.
+Return only one word: good or bad.
 """)
 
 # ─────────────────────────────────────────────────────────────
@@ -75,7 +83,7 @@ Return 'good' if the answer meets all criteria, otherwise return 'bad'. Do not r
 # ─────────────────────────────────────────────────────────────
 PROMPT_REFINE = Template("""
 You are a helpful assistant that can do two things:
-1. If the query is not related to the document content, return ONLY this sentence: "I'm sorry, I can't find the answer to your question even though I read all the documents. Please ask a question about the document's content."
+1. If the query is not related to the document summary, return ONLY this sentence: "I'm sorry, I can't find the answer to your question even though I read all the documents. Please ask a question about the document's content."
 2. If the query is related, refine the query to get more relevant and accurate information based on the document summary and retrieved information. Return ONLY the refined query, nothing else.
 
 Document Summary: {{ summary }}
@@ -89,8 +97,28 @@ Generated Answer: {{ answer }}
 # ─────────────────────────────────────────────────────────────
 PROMPT_TRANSLATE = Template("""
 You are a helpful assistant that can translate the answer to User language.
+EN is English, KR is Korean.
 ONLY RETURN THE TRANSLATED SEQUENCE, NOTHING ELSE.
 User language: {{ lang }}
 Answer: {{ text }}
 """)
 
+PROMPT_MAP = Template("""
+You are a helpful assistant that summarizes the following text.
+
+{{ text }}
+
+Please summarize the text in a concise manner.
+
+/no_think
+""")
+
+PROMPT_COMBINE = Template("""
+You are a helpful assistant that combines the following summaries.
+
+{{ text }}
+
+Please combine the summaries in a concise manner.
+
+/no_think
+""")
