@@ -143,6 +143,33 @@ class RedisCacheDB:
         self.r.rpush(date_key, entry)
         print(f"[LOG] Deleted cache entry for {file_id} → {date_key} / {entry}")
 
+    def add_feedback(self, file_id: str, fb_id: str, payload: dict):  # ★
+        """
+        Key   : feedback:<YYYY-MM-DD>
+        Field : <file_id>|<fb_id>|<HH:MM:SS>
+        Value : JSON 직렬화된 payload
+        TTL   : summaries 정책과 동일 (ttl_days + 1 일)
+        """
+        now = datetime.now(ZoneInfo("Asia/Seoul"))
+        date_key = f"feedback:{now:%Y-%m-%d}"
+        field    = f"{file_id}|{fb_id}|{now:%H:%M:%S}"
+
+        self.r.hset(date_key, field, json.dumps(payload))
+        self.r.expire(date_key, (self.ttl_days + 1) * 86_400)  # 하루 여유
+
+    def get_feedbacks(self, file_id: str) -> List[dict]:  # ★
+        """file_id 에 달린 모든 피드백을 [{…}, …] 형태로 반환"""
+        results: List[dict] = []
+        for i in range(self.ttl_days + 1):
+            date = datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=i)
+            date_key = f"feedback:{date:%Y-%m-%d}"
+            for field, val in self.r.hgetall(date_key).items():
+                if field.startswith(f"{file_id}|"):
+                    data = json.loads(val)
+                    data["id"] = field.split("|")[1]  # fb_id 추출
+                    results.append(data)
+        return results
+
 @lru_cache(maxsize=1)
 def get_cache_db() -> "RedisCacheDB":
     return RedisCacheDB()

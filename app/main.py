@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.controller import (
     pdf_summary_controller,
     chat_summary_controller,
+    feedback_controller,
 )
 print("[DEBUG] main.py 시작됨", flush=True)
 
@@ -23,5 +24,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ───────────────────────────────────────────
+# REST Endpoints
+# ───────────────────────────────────────────
 app.include_router(pdf_summary_controller.router)
 app.include_router(chat_summary_controller.router)
+app.include_router(feedback_controller.router)
