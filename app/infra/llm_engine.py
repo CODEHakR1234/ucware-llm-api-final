@@ -80,7 +80,7 @@ class LlmEngine(LlmChainIF):
             prompt = prompt + "/no_think"
         result = (await self._qa_chain.ainvoke(prompt)).strip()
         # </think> 태그 안의 내용을 제거
-        if think:
+        if "</think>" in result:
             result = re.sub(r'<think>.*?</think>', '', result, flags=re.DOTALL).strip()
         return result
 

@@ -102,23 +102,3 @@ ONLY RETURN THE TRANSLATED SEQUENCE, NOTHING ELSE.
 User language: {{ lang }}
 Answer: {{ text }}
 """)
-
-PROMPT_MAP = Template("""
-You are a helpful assistant that summarizes the following text.
-
-{{ text }}
-
-Please summarize the text in a concise manner.
-
-/no_think
-""")
-
-PROMPT_COMBINE = Template("""
-You are a helpful assistant that combines the following summaries.
-
-{{ text }}
-
-Please combine the summaries in a concise manner.
-
-/no_think
-""")
