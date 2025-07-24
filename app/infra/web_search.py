@@ -11,9 +11,10 @@ class WebSearch(WebSearchIF):
         result = web_search_tool.run(query)
         combined_result = "\n\n".join([item["content"] for item in result if "content" in item])
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=150
+            chunk_size=2000,
+            chunk_overlap=200
         )
         
         docs = splitter.create_documents([combined_result])
-        return docs
+        return [doc.page_content for doc in docs]
+        # return docs

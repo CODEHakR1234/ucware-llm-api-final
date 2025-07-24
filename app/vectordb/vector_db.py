@@ -19,8 +19,8 @@ from zoneinfo import ZoneInfo
 from app.cache.cache_db import get_cache_db   # 삭제 로그용
 
 # ─────────────────────── 환경 설정 ──────────────────────────────
-CHUNK_SIZE      = 500
-CHUNK_OVERLAP   = 50
+CHUNK_SIZE      = 3000
+CHUNK_OVERLAP   = 300
 _BATCH_SIZE     = 500
 
 CHROMA_HOST     = os.getenv("CHROMA_HOST", "localhost")
@@ -36,7 +36,6 @@ def _get_embedding_model():
     if LLM_PROVIDER.lower() == "hf":
         return HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL_NAME,
-            model_kwargs={"device": "cpu"},
             encode_kwargs={"normalize_embeddings": True},
         )
     return OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME)

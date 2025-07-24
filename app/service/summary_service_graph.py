@@ -32,7 +32,8 @@ class SummaryServiceGraph:
     async def generate(self, file_id: str, pdf_url: str, query: str, lang: str):
         """Run the graph and return a dict tailored to the caller."""
         result = await self.graph.ainvoke(
-            SummaryState(file_id=file_id, url=pdf_url, query=query, lang=lang)
+            SummaryState(file_id=file_id, url=pdf_url, query=query, lang=lang),
+            config={"recursion_limit": 100}
         )
 
         body = {
