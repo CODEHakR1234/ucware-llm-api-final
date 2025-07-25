@@ -13,17 +13,14 @@ echo "[3] pip 패키지 설치 (공통)"
 pip install --upgrade pip
 pip install -r requirements.txt   # FastAPI/LangChain 등
 
-# ──────────────── PaddleOCR & PaddlePaddle (GPU) ────────────────
-CUDA_VER=$(nvidia-smi --query-gpu=cuda_version --format=csv,noheader | head -1 | cut -d'.' -f1-2)
-echo "[CUDA] Detected CUDA version ${CUDA_VER}"
+#───────────────────────── PaddleOCR 설치 ────────────────────────#
+#   cu11.8 & cu12.x 모두 paddlepaddle-gpu==2.6.2.post118 휠 사용
+#   (CUDA 11.8 toolchain이 12.x 드라이버와 호환)
+PADDLE_WHEEL="paddlepaddle-gpu==2.6.2.post118"
+PADDLE_EXTRA_URL="-f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html"
 
-if [[ "$CUDA_VER" == "11.8" ]]; then
-  PAD_WHEEL="paddlepaddle-gpu==2.6.1.post118"
-else  # 12.x 는 120 wheel
-  PAD_WHEEL="paddlepaddle-gpu==2.6.1.post120"
-fi
-
-pip install "${PAD_WHEEL}" paddleocr rapidfuzz pillow
+echo "[2] PaddlePaddle GPU 휠 설치 (${PADDLE_WHEEL})"
+pip install "${PADDLE_WHEEL}" paddleocr rapidfuzz pillow ${PADDLE_EXTRA_URL}
 
 # ──────────────── LLM / Embedding Provider 선택 ────────────────
 echo ""
