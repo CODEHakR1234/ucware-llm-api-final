@@ -1,3 +1,20 @@
+"""cache_db.py
+PDF 요약·실행 로그·사용자 피드백을 Redis에 임시 보관하는 캐시 모듈입니다.
+
+설계 포인트
+===========
+1. 날짜별 HSET 구분 – 요약은 `pdf:summaries:YYYY-MM-DD` 형식 HSET에 저장해
+   하루 단위 만료(TTL) 관리가 쉽습니다.
+2. 메타데이터 키 – `pdf:metadata:<file_id>` 키에 날짜 버킷 정보를 따로 기록해
+   존재 여부를 빠르게 확인합니다.
+3. **TTL 관리** – 기본 보존 기간은 7일(`REDIS_TTL_DAYS`)이며, 모두 초(second)
+   단위 TTL 로 설정해 계산을 단순화했습니다.
+
+환경 변수
+---------
+- `REDIS_HOST`, `REDIS_PORT`, `REDIS_DB` : Redis 접속 정보
+- `REDIS_TTL_DAYS`                     : 기본 보존 기간(일)
+"""
 
 import os
 import redis
@@ -8,6 +25,19 @@ import json
 from zoneinfo import ZoneInfo
 
 class RedisCacheDB:
+    """Redis 캐시 어댑터.
+
+    Parameters
+    ----------
+    host : str, optional
+        Redis 호스트명.
+    port : int, optional
+        Redis 포트 번호.
+    db : int, optional
+        Redis 논리 DB.
+    ttl_days : int, optional
+        요약·피드백 기본 보존 기간(일).
+    """
     def __init__(
         self,
         host: str = os.getenv("REDIS_HOST", "localhost"),
@@ -18,19 +48,20 @@ class RedisCacheDB:
         self.r = redis.Redis(host=host, port=port, db=db, decode_responses=True)
         self.ttl_days = ttl_days
         
+    # ----- 내부 키 생성 -------------------------------------------------    
     def _get_date_key(self, date: datetime = None) -> str:
-        """날짜를 기준으로 HSET key 생성"""
+        """`pdf:summaries:YYYY-MM-DD` 형태 날짜 버킷 키 반환."""
         if date is None:
             date = datetime.now(ZoneInfo("Asia/Seoul"))
         return f"pdf:summaries:{date.strftime('%Y-%m-%d')}"
     
     def _get_metadata_key(self, file_id: str) -> str:
-        """파일 메타데이터용 key"""
+        """`pdf:metadata:<file_id>` 키 반환."""
         return f"pdf:metadata:{file_id}"
 
+    # ----- 요약본 조회 -------------------------------------------------
     def get_pdf(self, fid: str) -> Optional[str]:
-        """file_id로 요약본 조회 (모든 날짜에서 검색)"""
-        # 1. 먼저 메타데이터에서 저장된 날짜 확인
+        """요약본을 찾으면 문자열을, 없으면 None."""
         metadata_key = self._get_metadata_key(fid)
         metadata = self.r.get(metadata_key)
 
@@ -42,7 +73,6 @@ class RedisCacheDB:
             if summary:
                 return summary
         
-        # 2. 메타데이터가 없으면 최근 7일간의 모든 날짜 검색
         for i in range(self.ttl_days):
             date = datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=i)
             date_key = self._get_date_key(date)
@@ -53,15 +83,12 @@ class RedisCacheDB:
         return None
 
     def exists_pdf(self, fid: str) -> bool:
-        """해당 file_id 에 대한 요약이 **어디**에든 존재하는지 빠르게 확인."""
-        # 1) 메타데이터 키가 있으면 바로 True
+        """요약 존재 여부만 확인 (내용은 가져오지 않음)."""
         metadata_key = self._get_metadata_key(fid)
         if self.r.exists(metadata_key):
-            # 접근 시 TTL 갱신
             self.r.expire(metadata_key, self.ttl_days * 86400)
             return True
 
-        # 2) 최근 ttl_days 동안 날짜별 HSET 조회
         now = datetime.now(ZoneInfo("Asia/Seoul"))
         for i in range(self.ttl_days):
             date_key = self._get_date_key(now - timedelta(days=i))
@@ -70,15 +97,14 @@ class RedisCacheDB:
 
         return False
 
+    # ----- 요약본 저장 / 삭제 -----------------------------------------
     def set_pdf(self, fid: str, s: str):
-        """날짜별 HSET에 요약본 저장"""
+        """요약 저장 & 메타데이터 갱신."""
         now = datetime.now(ZoneInfo("Asia/Seoul"))
         date_key = self._get_date_key(now)
         
-        # 1. HSET에 요약본 저장
         self.r.hset(date_key, fid, s)
         
-        # 2. 메타데이터 저장 (조회 성능 향상용)
         metadata = {
             'date': now.strftime('%Y-%m-%d'),
             'timestamp': now.isoformat(),
@@ -90,9 +116,33 @@ class RedisCacheDB:
             json.dumps(metadata)
         )
         
-        # 3. 날짜별 HSET에도 TTL 설정 (8일로 설정해서 여유 확보)
         self.r.expire(date_key, (self.ttl_days + 1) * 86400)
 
+    def delete_pdf(self, fid: str) -> bool:
+        """요약·메타데이터 삭제 후 삭제 로그 남김."""
+        metadata_key = self._get_metadata_key(fid)
+        metadata = self.r.get(metadata_key)
+        deleted = False
+
+        if metadata:
+            meta = json.loads(metadata)
+            date_key = f"pdf:summaries:{meta['date']}"
+            deleted = bool(self.r.hdel(date_key, fid))
+            self.r.delete(metadata_key)
+        else:
+            for i in range(self.ttl_days):
+                date = datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=i)
+                date_key = self._get_date_key(date)
+                if self.r.hexists(date_key, fid):
+                    deleted = bool(self.r.hdel(date_key, fid))
+                    break
+
+        if deleted:
+            self._log_cache_deletion(fid)
+
+        return deleted
+
+    # ----- 로그 --------------------------------------------------------
     def set_log(self, file_id: str, url: str, query: str, lang: str, msg: str):
         now = datetime.now()
         date_str = now.strftime("%Y-%m-%d")
@@ -109,32 +159,6 @@ class RedisCacheDB:
         }
         self.r.hset(log_key, now.strftime("%Y-%m-%d %H:%M:%S"), json.dumps(log_value))
 
-    def delete_pdf(self, fid: str) -> bool:
-        metadata_key = self._get_metadata_key(fid)
-        metadata = self.r.get(metadata_key)
-        deleted = False
-
-        if metadata:
-            meta = json.loads(metadata)
-            date_key = f"pdf:summaries:{meta['date']}"
-            deleted = bool(self.r.hdel(date_key, fid))
-            self.r.delete(metadata_key)
-        else:
-        # 메타데이터가 없으면 최근 날짜 중 찾아서 삭제
-            for i in range(self.ttl_days):
-                date = datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=i)
-                date_key = self._get_date_key(date)
-                if self.r.hexists(date_key, fid):
-                    deleted = bool(self.r.hdel(date_key, fid))
-                    break
-
-    # ✅ 삭제 성공했으면 무조건 로그 남기기
-        if deleted:
-            self._log_cache_deletion(fid)
-
-        return deleted
-
-
     def _log_cache_deletion(self, file_id: str):
         now = datetime.now(ZoneInfo("Asia/Seoul"))
         date_str = now.strftime('%Y-%m-%d')
@@ -143,7 +167,8 @@ class RedisCacheDB:
         self.r.rpush(date_key, entry)
         print(f"[LOG] Deleted cache entry for {file_id} → {date_key} / {entry}")
 
-    def add_feedback(self, file_id: str, fb_id: str, payload: dict):  # ★
+    # ----- 피드백 ------------------------------------------------------
+    def add_feedback(self, file_id: str, fb_id: str, payload: dict):
         """
         Key   : feedback:<YYYY-MM-DD>
         Field : <file_id>|<fb_id>|<HH:MM:SS>
@@ -155,10 +180,10 @@ class RedisCacheDB:
         field    = f"{file_id}|{fb_id}|{now:%H:%M:%S}"
 
         self.r.hset(date_key, field, json.dumps(payload))
-        self.r.expire(date_key, (self.ttl_days + 1) * 86_400)  # 하루 여유
+        self.r.expire(date_key, (self.ttl_days + 1) * 86_400)
 
-    def get_feedbacks(self, file_id: str) -> List[dict]:  # ★
-        """file_id 에 달린 모든 피드백을 [{…}, …] 형태로 반환"""
+    def get_feedbacks(self, file_id: str) -> List[dict]:
+        """해당 PDF(file_id)에 달린 모든 피드백 반환."""
         results: List[dict] = []
         for i in range(self.ttl_days + 1):
             date = datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=i)
@@ -166,10 +191,11 @@ class RedisCacheDB:
             for field, val in self.r.hgetall(date_key).items():
                 if field.startswith(f"{file_id}|"):
                     data = json.loads(val)
-                    data["id"] = field.split("|")[1]  # fb_id 추출
+                    data["id"] = field.split("|")[1]
                     results.append(data)
         return results
 
+# 싱글턴 ---------------------------------------------------------------
 @lru_cache(maxsize=1)
 def get_cache_db() -> "RedisCacheDB":
     return RedisCacheDB()

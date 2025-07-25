@@ -1,4 +1,10 @@
 # app/vectordb/vector_db.py
+"""vector_db.py
+Chroma-based 벡터 DB 래퍼.
+
+PDF 텍스트 청크를 임베딩 후 저장·검색하며, 삭제/모니터링 유틸리티도 포함한다.
+"""
+
 from __future__ import annotations
 
 import os
@@ -18,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from app.cache.cache_db import get_cache_db   # 삭제 로그용
 
-# ─────────────────────── 환경 설정 ──────────────────────────────
+# ─────────────────────── 설정 상수 ──────────────────────────
 CHUNK_SIZE      = 3000
 CHUNK_OVERLAP   = 300
 _BATCH_SIZE     = 500
@@ -31,8 +37,9 @@ EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME")
 
 _PERSIST_DIR    = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
 
-# ──────────────────── Embedding 선택 ────────────────────────────
+# ───────────────── Embedding 모델 선택 ────────────────────
 def _get_embedding_model():
+    """환경 변수 설정에 따라 임베딩 모델(OpenAI/HF)을 반환한다."""
     if LLM_PROVIDER.lower() == "hf":
         return HuggingFaceEmbeddings(
             model_name=EMBEDDING_MODEL_NAME,
@@ -40,8 +47,16 @@ def _get_embedding_model():
         )
     return OpenAIEmbeddings(model=EMBEDDING_MODEL_NAME)
 
-# ──────────────────── VectorDB 클래스 ───────────────────────────
+# ───────────────────────── VectorDB ─────────────────────────
 class VectorDB:
+    """Chroma 벡터 스토어 헬퍼.
+
+    Notes
+    -----
+    - Chroma 클라이언트는 lazy 연결로 성능 이슈를 줄인다.
+    - `store`에서 청크 분할·임베딩·문서 저장을 한 번에 처리한다.
+    """
+
     def __init__(self) -> None:
         self.embeddings = _get_embedding_model()
         self.text_splitter = RecursiveCharacterTextSplitter(
@@ -51,9 +66,9 @@ class VectorDB:
         )
 
         self._lock   = threading.RLock()
-        self._client = None                       # lazy 연결
+        self._client = None                       
 
-    # ------------- Chroma client (lazy) ------------------------
+    # ──────────── Chroma client (lazy) ────────────
     @property
     def client(self) -> chromadb.HttpClient | None:
         if self._client is None:
@@ -69,12 +84,12 @@ class VectorDB:
                 self._client = None
         return self._client
 
-    # ------------- 내부 헬퍼 -------------------------------
+    # ──────────── 내부 헬퍼 ────────────
     def _get_collection_name(self, file_id: str) -> str:
         return file_id
 
     def _get_vectorstore(self, file_id_or_col: str) -> Chroma:
-        """file_id 또는 이미 collection_name 이 들어와도 동작."""
+        """Chroma 컬렉션 객체를 반환한다."""
         if self.client is None:
             raise RuntimeError("Chroma client not available")
         return Chroma(
@@ -86,7 +101,7 @@ class VectorDB:
 
     # ------------- CRUD 메서드 ----------------------------
     def store(self, content: Union[str, List[str]], file_id: str) -> None:
-        """`content` 가 문자열이면 → 청크로 분할, list[str] 이면 그대로 저장."""
+        """텍스트(또는 청크 리스트)를 임베딩 후 저장한다."""
         try:
             chunks = (
                 self.text_splitter.split_text(content)
@@ -124,6 +139,7 @@ class VectorDB:
             print(f"[VectorDB.store] ❌ {e}")
 
     def get_docs(self, file_id: str, query: str, k: int = 8) -> List[Document]:
+        """유사도 검색 결과를 반환한다."""
         try:
             return self._get_vectorstore(self._get_collection_name(file_id)).similarity_search(query, k=k)
         except Exception as e:
@@ -131,7 +147,7 @@ class VectorDB:
             return []
 
     def get_all_chunks(self, file_id: str) -> List[Document]:
-        """chunk_index 기준 정렬 반환."""
+        """저장된 모든 청크를 chunk_index 순으로 반환한다."""
         try:
             col = self.client.get_collection(self._get_collection_name(file_id))  # type: ignore
             data = col.get(include=["documents", "metadatas"])
@@ -148,12 +164,14 @@ class VectorDB:
             return []
 
     def has_chunks(self, file_id: str) -> bool:
+        """해당 파일에 저장된 청크가 하나라도 있는지 확인."""
         try:
             return self.client.get_collection(self._get_collection_name(file_id)).count() > 0  # type: ignore
         except Exception:
             return False
 
     def delete_document(self, file_id: str) -> bool:
+        """컬렉션 전체를 삭제하고 로그를 남긴다."""
         try:
             with self._lock:
                 self.client.delete_collection(self._get_collection_name(file_id))  # type: ignore
@@ -164,14 +182,15 @@ class VectorDB:
             return False
 
     def is_chroma_alive(self) -> bool:
+        """Chroma 서버 헬스 체크."""
         try:
-            self.client.heartbeat()         # type: ignore
+            self.client.heartbeat() 
             return True
         except Exception:
             return False
 
 
-# ────────────────── 싱글턴 getter ───────────────────────────────
+# 싱글턴 getter ---------------------------------------------------------
 @lru_cache(maxsize=1)
 def get_vector_db() -> "VectorDB":
     return VectorDB()

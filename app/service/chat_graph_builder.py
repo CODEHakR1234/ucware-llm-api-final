@@ -1,4 +1,14 @@
 # app/service/chat_graph_builder.py
+"""chat_graph_builder.py
+채팅 기록 요약·질문 응답용 LangGraph 빌더.
+
+- `ChatState` : 그래프 실행 중 공유 상태
+- `safe_retry` : I/O 노드 재시도 래퍼
+- `ChatGraphBuilder` : 그래프 정의 및 컴파일
+
+컨트롤러는 `ChatSummaryGraph` 래퍼를 통해 이 그래프를 호출한다.
+"""
+
 from __future__ import annotations
 import asyncio
 from functools import wraps
@@ -7,7 +17,10 @@ from langgraph.graph import StateGraph
 from pydantic import BaseModel
 from app.domain.interfaces import LlmChainIF, TextChunk
 
+# ────────────────────────── 상태 모델 ────────────────────────────
 class ChatState(BaseModel):
+    """그래프 실행 중 사용되는 공유 상태."""
+
     messages: List[str]
     query: str
     lang: str = "ko"
@@ -20,8 +33,12 @@ class ChatState(BaseModel):
     
     need_refine: bool = False
 
+# ────────────────────────── 공통 설정 ────────────────────────────
 _RETRY, _SLEEP = 3, 1
+
+# ────────────────────────── 재시도 데코레이터 ───────────────────
 def safe_retry(fn: Callable[[ChatState], Awaitable[ChatState]]):
+    """노드 함수가 예외를 던질 때 최대 3회까지 재시도한다."""
     @wraps(fn)
     async def _wrap(st: ChatState):
         for i in range(1, _RETRY + 1):
@@ -35,6 +52,7 @@ def safe_retry(fn: Callable[[ChatState], Awaitable[ChatState]]):
                 await asyncio.sleep(_SLEEP)
     return _wrap
 
+# ────────────────────────── 그래프 빌더 ───────────────────────────
 class ChatGraphBuilder:
     def __init__(self, llm: LlmChainIF):
         self.llm = llm
@@ -42,17 +60,20 @@ class ChatGraphBuilder:
     def build(self):
         g = StateGraph(ChatState)
         
+        # entry --------------------------------------------------------
         async def entry(st: ChatState):
             st.is_summary = st.query.strip().upper() == "SUMMARY_ALL"
             return st
         g.add_node("entry", entry)
 
+        # summarize ----------------------------------------------------
         @safe_retry
         async def summarize(st: ChatState):
             st.summary = await self.llm.summarize(st.messages)  # type: ignore[arg-type]
             return st
         g.add_node("summarize", summarize)
 
+        # answer -------------------------------------------------------
         @safe_retry
         async def answer(st: ChatState):
             docs = "\n".join(st.messages)
@@ -67,6 +88,7 @@ class ChatGraphBuilder:
             return st
         g.add_node("answer", answer)
         
+        # verify -------------------------------------------------------
         @safe_retry
         async def verify(st: ChatState):
             prompt = (
@@ -85,7 +107,10 @@ class ChatGraphBuilder:
             answer = await self.llm.execute(prompt)
             st.log.append(f"answer: {answer}")
             if "bad" in answer.lower():
-                st.answer = "I'm sorry, I don't know the answer to that question because it's not related to the chat history. Please try again."
+                st.answer = (
+                    "I'm sorry, I don't know the answer to that question"
+                    "because it's not related to the chat history. Please try again."
+                )
                 return st
             if "true" in answer.lower():
                 st.need_refine = False
@@ -102,6 +127,7 @@ class ChatGraphBuilder:
         g.add_conditional_edges("verify", post_verify, {
             "refine": "refine", "translate": "translate", "finish": "finish"})
 
+        # refine -------------------------------------------------------
         @safe_retry
         async def refine(st: ChatState):
             docs = "\n".join(st.messages)
@@ -125,6 +151,7 @@ class ChatGraphBuilder:
         g.add_conditional_edges("refine", post_refine, {
             "verify": "verify", "finish": "finish"})
 
+        # translate ----------------------------------------------------
         async def translate(st: ChatState):
             text = st.summary if st.is_summary else st.answer
 
@@ -145,8 +172,10 @@ class ChatGraphBuilder:
         
         g.add_node("translate", translate)
 
+        # finish -------------------------------------------------------
         g.add_node("finish", lambda st: st)
 
+        # ──────────── 그래프 구조 정의 ────────────
         g.set_entry_point("entry")
         g.add_conditional_edges(
             "entry",
