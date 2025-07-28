@@ -1,8 +1,8 @@
 # app/service/summary_graph_builder.py
-"""LangGraph pipeline with robust error handling **+ 3-회 재시도**.
+"""summary_graph_builder.py
+LangGraph 기반 요약 파이프라인 빌더.
 
-노드가 I/O 오류를 내면 최대 3번까지 재시도하고 모두 실패하면
-`st.error`에 최종 예외 메시지를 기록한 뒤 `finish`로 단락(exit)한다.
+모든 노드는 최대 3회 재시도하며, 실패 시 에러 메시지를 기록하고 종료한다.
 """
 from __future__ import annotations
 
@@ -66,8 +66,16 @@ _SLEEP = 1  # seconds between retries
 
 
 def safe_retry(fn: Callable[[SummaryState], Awaitable[SummaryState]]):
-    """Try ``fn`` up to `_RETRY` times; on final failure record error."""
+    """LangGraph 노드에 재시도 로직을 적용하는 데코레이터.
 
+    `_RETRY` 횟수만큼 재시도하며 마지막 실패 시 상태 객체에 에러를 기록한다.
+
+    Args:
+        fn: SummaryState를 받아 비동기로 처리하는 함수이자 노드.
+
+    Returns:
+        자동 재시도 로직이 적용된 비동기 함수.
+    """
     @wraps(fn)
     async def _wrap(st: SummaryState):  # type: ignore[override]
         for attempt in range(1, _RETRY + 1):
@@ -93,6 +101,15 @@ def safe_retry(fn: Callable[[SummaryState], Awaitable[SummaryState]]):
 # Graph builder
 # ---------------------------------------------------------------------------
 class SummaryGraphBuilder:
+    """요약 그래프를 빌드하는 LangGraph 파이프라인 생성기.
+
+    Attributes:
+        loader: PDF 로더 (URL → TextChunk 리스트).
+        store: 벡터스토어 (저장 및 검색).
+        web_search: 외부 검색 엔진 (WebSearchIF).
+        llm: LangChain 호환 LLM 실행기.
+        cache: 캐시 저장소 (요약, 로그, 등).
+    """
     def __init__(
         self,
         loader: PdfLoaderIF,
@@ -110,12 +127,22 @@ class SummaryGraphBuilder:
         # 0. Entry ------------------------------------------------------
         @safe_retry
         async def entry_router(st: SummaryState):
+            """요청에 따른 초기 변수를 설정하고 캐시 상태를 확인한다.
+            캐시에 데이터가 있을 경우 요약 데이터 또한 설정된다.
+                
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                초기 변수(is_summary, cached, embedded 등)가 설정된 상태 객체.
+            """
             st.is_summary = st.query.strip().upper() == "SUMMARY_ALL"
             st.cached = self.cache.exists_summary(st.file_id)
             if st.cached:
                 st.summary = self.cache.get_summary(st.file_id)
             st.embedded = await self.store.has_chunks(st.file_id)  # type: ignore[arg-type]
             
+            # 로그 기록은 서브 기능이므로 실패해도 작동을 멈추지 않고 계속 진행한다.
             try:
                 self.cache.set_log(
                     st.file_id, st.url, st.query, st.lang, msg="entry"
@@ -139,6 +166,14 @@ class SummaryGraphBuilder:
         # 1. Load PDF ---------------------------------------------------
         @safe_retry
         async def load_pdf(st: SummaryState):
+            """PDF 파일을 로드하여 텍스트 청크로 변환한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                텍스트 청크가 추가된 상태 객체.
+            """
             st.chunks = await self.loader.load(st.url)
             return st
 
@@ -147,6 +182,14 @@ class SummaryGraphBuilder:
         # 2. Embed ------------------------------------------------------
         @safe_retry
         async def embed(st: SummaryState):
+            """텍스트 청크를 임베딩을 거쳐 벡터스토어에 저장한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                임베딩된 텍스트 청크가 추가된 상태 객체.
+            """
             if st.chunks is None:
                 raise ValueError("chunks is None — cannot embed")
             if not st.embedded:
@@ -159,6 +202,14 @@ class SummaryGraphBuilder:
         # 3-S. Summarize -----------------------------------------------
         @safe_retry
         async def summarize(st: SummaryState):
+            """텍스트 청크를 요약한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                요약된 텍스트 청크가 추가된 상태 객체.
+            """
             if st.chunks is None:
                 st.chunks = await self.store.get_all(st.file_id)  # type: ignore[arg-type]
             st.summary = await self.llm.summarize(st.chunks)  # type: ignore[arg-type]
@@ -169,6 +220,16 @@ class SummaryGraphBuilder:
         # 3-Q. Retrieve -------------------------------------------------
         @safe_retry
         async def RAG_router(st: SummaryState):
+            """RAG를 시작하기 전 어떻게 처리할지 LLM을 통해 결정한다.
+            요약된 데이터와 쿼리를 보고 외부 검색 여부를 판단한다.
+            만약 쿼리가 "SUMMARY_ALL"이면 판단 없이 넘어간다.
+            
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                외부 검색 여부가 설정된 상태 객체.
+            """
             if st.is_summary:
                 return st
             
@@ -203,12 +264,22 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def retrieve_web(st: SummaryState):
+            """외부 검색 엔진을 통해 검색 결과를 가져온다.
+            벡터스토어에서 유사도 검색을 통해 검색 결과 또한 일부 가져온다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                검색 결과가 추가된 상태 객체.(st.retrieved)
+            """
             search_task = self.web_search.search(st.query, k=5)
             vector_task = self.store.similarity_search(st.file_id, st.query, k=3)
 
             search_result, vector_result = await asyncio.gather(search_task, vector_task)
             
             st.retrieved = vector_result + search_result
+            st.log.append(f"retrieved: {search_result}")
             
             return st
         
@@ -222,6 +293,14 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def retrieve_vector(st: SummaryState):
+            """벡터스토어에서 유사도 검색을 통해 검색 결과를 가져온다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                검색 결과가 추가된 상태 객체.(st.retrieved)
+            """
             st.retrieved = await self.store.similarity_search(st.file_id, st.query, k=8)
             return st
         
@@ -245,9 +324,15 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def grade(st: SummaryState):
-            # 요약된 본문, Retrieved된 결과를 보고 문맥상 필요한지 확인
-            # 필요하다면 추가적인 정보를 찾아야 한다면 'true'를 반환
-            # 필요하지 않다면 'false'를 반환
+            """
+            Retrieve된 청크가 정말 쿼리문 응답에 필요한 정보인지 llm을 통해 문맥적으로 판단한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                필요한 텍스트 청크만으로 정제된 상태 객체.(st.retrieved)
+            """
             if not st.retrieved:
                 st.error = "No relevant chunks"
                 return st
@@ -283,6 +368,14 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def generate(st: SummaryState):
+            """Retrieved된 청크를 바탕으로 쿼리문에 대한 답변을 생성한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                생성된 답변이 추가된 상태 객체.(st.answer)
+            """
             prompt = PROMPT_GENERATE.render(query=st.query, retrieved=st.retrieved)
             st.answer = await self.llm.execute(prompt)
             return st
@@ -299,11 +392,14 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def verify(st: SummaryState):
-            # 생성된 답변을 검증하여 다음 내용들을 판별:
-            # 1. 생성된 답변이 쿼리에 대한 적절한 답변인가?
-            # 2. 생성된 답변이 retrieved 정보를 바탕으로 한 것인가?
-            # 3. 생성된 답변이 논리적으로 일관성이 있는가?
-            # 4. 생성된 답변이 완전하고 구체적인가?
+            """생성된 답변이 쿼리에 대한 적절한 답변인지 판별하고, 관련 없는 경우 리파인 프로세스를 진행한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                리파인 프로세스가 진행된 상태 객체.(st.query)
+            """
             
             prompt = PROMPT_VERIFY.render(
                 query=st.query,
@@ -333,6 +429,15 @@ class SummaryGraphBuilder:
         
         @safe_retry
         async def refine(st: SummaryState):
+            """쿼리문을 개선하여 더 정확한 답변을 얻기 위한 작업을을 진행한다.
+            이 작업은은 최대 3회 진행된다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                개선된 쿼리문 및 개선 횟수가 추가된 상태 객체.(st.query, st.refine_count)
+            """
             st.refine_count += 1
             if st.refine_count > 3:
                 st.answer = "I'm sorry, I can't find the answer to your question even though I read all the documents. Please ask a question about the document's content."
@@ -371,6 +476,14 @@ class SummaryGraphBuilder:
         # 5. Save summary ----------------------------------------------
         @safe_retry
         async def save_summary(st: SummaryState):
+            """요약 데이터를 캐시에 저장한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                요약 데이터가 캐시에 저장된 상태 객체.
+            """
             if st.is_summary and not st.cached and st.summary:
                 self.cache.set_summary(st.file_id, st.summary)
             return st
@@ -382,7 +495,14 @@ class SummaryGraphBuilder:
 
         @safe_retry
         async def translate(st: SummaryState):
-            
+            """생성된 답변을 사용자 언어로 번역한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                번역된 답변이 추가된 상태 객체.(st.answer)
+            """
             if st.is_summary:
                 text = self.cache.get_summary(st.file_id)
             else:
@@ -396,8 +516,16 @@ class SummaryGraphBuilder:
         # 6. Translate & finish ----------------------------------------
         g.add_node("translate", translate)
         async def finish_node(st: SummaryState):
-            # 에러가 있으면 에러 메시지를, 없으면 실행 로그를 문자열로 묶어서 기록
+            """요약 프로세스가 종료되면 실행 로그를 기록한다.
+            에러가 있으면 에러 메시지를, 없으면 실행 로그를 문자열로 묶어서 기록
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                실행 로그가 캐시에 저장된 상태 객체.
+            """
             msg = st.error if st.error else " | ".join(st.log or [])
+            # 로그 기록은 서브 기능이므로 실패해도 작동을 멈추지 않고 계속 진행한다.
             try:
                 self.cache.set_log(
                     st.file_id, st.url, st.query, st.lang, msg=msg

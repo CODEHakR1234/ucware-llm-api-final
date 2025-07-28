@@ -1,4 +1,11 @@
 # app/prompts.py
+"""prompts.py
+LLM 파이프라인에서 사용하는 주요 프롬프트 템플릿 정의 모듈.
+
+Jinja2 템플릿을 사용하며, 웹 여부 판단 / 정보 평가 / 응답 생성 / 검증 /
+리파인 / 번역 등 LangGraph 노드별 작업에 대응하는 프롬프트를 제공한다.
+"""
+
 from jinja2 import Template
 
 # ─────────────────────────────────────────────────────────────
@@ -101,4 +108,23 @@ EN is English, KR is Korean.
 ONLY RETURN THE TRANSLATED SEQUENCE, NOTHING ELSE.
 User language: {{ lang }}
 Answer: {{ text }}
+""")
+
+# ─────────────────────────────────────────
+# 새 멀티모달 자습서용 프롬프트
+# ─────────────────────────────────────────
+PROMPT_TUTORIAL = Template("""
+You are an expert tutor.
+Using the *semantic chunks* below, write a self-study guide
+for a learner.
+
+Rules
+-----
+• Output in Markdown (H1~H3 headings).
+• After every Figure/Table image, add “**Tutor’s note:** …” line.
+• Keep each section ≤ 200 words if possible.
+• End with “Key takeaways” bulleted list.
+
+Chunks:
+{{ chunks }}
 """)

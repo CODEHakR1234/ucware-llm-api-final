@@ -44,7 +44,7 @@ def get_llm_instance(temperature: float = 0.5):
             model_name=LLM_MODEL_NAME,
             temperature=temperature,
             max_tokens=1000,
-            openai_api_base="http://localhost:12000/v1",
+            openai_api_base=os.getenv("OPENAI_API_BASE", "http://localhost:12000/v1")
         )
     # 기본: OpenAI ChatCompletion API
     return ChatOpenAI(model_name=LLM_MODEL_NAME, temperature=temperature, max_tokens=1000)

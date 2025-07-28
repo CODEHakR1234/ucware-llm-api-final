@@ -6,24 +6,28 @@
 """
 
 from abc import abstractmethod
-from typing import List, Optional, Protocol
+from typing import List, Optional, Protocol, Union
 
 # 공용 타입 -------------------------------------------------------------
+from app.domain.page_chunk import PageChunk
 TextChunk = str  # PDF에서 추출한 텍스트 조각
 
 
 class PdfLoaderIF(Protocol):
-    """PDF URL → TextChunk 리스트."""
+    """
+    PDF URL → 텍스트/멀티모달 청크 리스트.
+    with_figures=True  ⇒  List[PageChunk]
+    else               ⇒  List[TextChunk]
+    """
 
     @abstractmethod
-    async def load(self, url: str) -> List[TextChunk]: ...
-
+    async def load(self, url: str, *, with_figures: bool = False) -> List[Union[TextChunk, PageChunk]]: ...
 
 class WebSearchIF(Protocol):
     """외부 검색 결과를 TextChunk 리스트로 반환."""
 
     @abstractmethod
-    async def search(self, query: str) -> List[TextChunk]: ...
+    async def search(self, query: str, k: int = 5) -> List[TextChunk]: ...
 
 
 class VectorStoreIF(Protocol):
@@ -42,7 +46,6 @@ class VectorStoreIF(Protocol):
 
     @abstractmethod
     async def has_chunks(self, doc_id: str) -> bool: ...
-
 
 class LlmChainIF(Protocol):
     """LLM 호출 래퍼."""
@@ -65,4 +68,7 @@ class CacheIF(Protocol):
 
     @abstractmethod
     def exists_summary(self, key: str) -> bool: ...
+
+    @abstractmethod
+    def set_log(self, file_id:str, url:str, query:str, lang:str, msg:str) -> None: ...
 

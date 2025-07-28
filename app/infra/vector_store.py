@@ -1,4 +1,4 @@
-# app/infrastructure/vector_store.py
+# app/infra/vector_store.py
 """vector_store.py
 LangChain‑Chroma 기반 벡터 스토어 어댑터.
 

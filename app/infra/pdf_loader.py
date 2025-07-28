@@ -1,27 +1,52 @@
-"""
-PdfLoader
-=========
+from __future__ import annotations
+from typing import List, Union
 
-PDFReceiver → 텍스트 → RecursiveCharacterTextSplitter → List[str]
-"""
-
-from typing import List
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-
-from app.domain.interfaces import PdfLoaderIF, TextChunk
+from app.domain.interfaces   import PdfLoaderIF, TextChunk
+from app.domain.page_chunk   import PageChunk
+from app.domain.page_element import PageElement
 from app.receiver.pdf_receiver import PDFReceiver
+from app.vision.captioner      import Captioner
+from app.chunker.semantic_chunker import SemanticChunker
+from app.infra.figure_store     import FigureStore
 
-# OCR 출력은 문장 길이가 짧은 편이므로 1 500자 chunk + overlap 200
-_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1500,
-    chunk_overlap=200,
-    separators=["\n\n", "\n", ". ", " ", ""],   # 문단→문장→단어
-)
+_receiver  = PDFReceiver()
+_captioner = Captioner()
+_chunker   = SemanticChunker()
+_store     = FigureStore()
 
 class PdfLoader(PdfLoaderIF):
-    async def load(self, url: str) -> List[TextChunk]:
-        text = await PDFReceiver().fetch_and_extract_text(url)
-        if not text.strip():
+    async def load(
+        self,
+        url: str,
+        *,
+        with_figures: bool = False,
+    ) -> List[Union[TextChunk, PageChunk]]:
+        """PDF → 청크
+
+        Parameters
+        ----------
+        url          : PDF URL
+        with_figures : True  → PageChunk 리스트 (GuideGraph 용)
+                       False → plain str 리스트 (SummaryGraph 용)
+        """
+        elements: List[PageElement] = await _receiver.fetch_and_extract_elements(url)
+
+        # ── (1) 자습서 모드: 캡션 + 디스크 저장 ───────────────────
+        if with_figures:
+            vis = [e for e in elements if e.kind in ("figure", "table", "graph")]
+            if vis:
+                caps = await _captioner.caption([e.content for e in vis])
+                urls = _store.save_many(url.split("/")[-1], [e.content for e in vis])
+                for e, cap, u in zip(vis, caps, urls):
+                    e.caption, e.content = cap or "No caption.", u
+
+        # ── (2) 청크 분할 ────────────────────────────────────────
+        chunks = _chunker.group(elements, return_pagechunk=with_figures)
+        if not chunks:
             raise ValueError("PDF 텍스트 추출 실패")
-        return _splitter.split_text(text)
+
+        # GuideGraph → PageChunk / SummaryGraph → str
+        if with_figures:
+            return chunks                       # List[PageChunk]
+        return [ck if isinstance(ck, str) else ck.text for ck in chunks]  # List[str]
 
