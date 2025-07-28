@@ -1,57 +1,73 @@
-#!/bin/bash
-# run_vllm.sh: vLLM 서버 실행 스크립트 (Qwen3-30B-A3B-GPTQ-Int4, 포트 12000, expert parallel 사용)
+#!/usr/bin/env bash
+set -euo pipefail
 
-# 1. 가상환경 활성화
-echo "[1] 가상환경 활성화 중..."
-source ~/vllm-data-storage/datastorage/bin/activate
-
-# 2. Hugging Face 토큰 입력
-echo ""
-echo "[2] Hugging Face Access Token을 입력하세요 (입력 내용은 화면에 표시되지 않습니다)"
-read -s -p "🔑 HUGGING_FACE_HUB_TOKEN: " USER_TOKEN
-echo ""
-export HUGGING_FACE_HUB_TOKEN="$USER_TOKEN"
-
-# 3. 캐시 디렉토리 환경변수 설정
-export HF_HOME="/home/work/vllm-data-storage/huggingface-cache"
-export VLLM_CACHE_ROOT="/home/work/vllm-data-storage/vllm-cache"
-
-# 4. 포트 설정
+###############################################################################
+# 경로 설정
+###############################################################################
+BASE_DIR="$HOME/vllm-data-storage"
+VENV_DIR="$BASE_DIR/vllm-venv"           # 새·기존 venv 유지
+HF_CACHE="$BASE_DIR/huggingface-cache"
+VLLM_CACHE="$BASE_DIR/vllm-cache"
+LOG_FILE="vllm.log"
 PORT=12000
-
-# 5. 모델 이름 고정
 MODEL_NAME="Qwen/Qwen3-30B-A3B-GPTQ-Int4"
 
-echo ""
-echo "[🚀] vLLM 서버를 모델 [$MODEL_NAME] 로 실행합니다 (포트: $PORT)"
-echo "     ⏳ 모델 로딩에는 수십 초에서 수 분이 걸릴 수 있습니다."
-echo "     백그라운드에서 실행되며 로그는 vllm.log 파일에 저장됩니다."
+mkdir -p "$BASE_DIR" "$HF_CACHE" "$VLLM_CACHE"
 
-# 6. vLLM 서버 백그라운드 실행
-nohup python -m vllm.entrypoints.openai.api_server \
-  --model "$MODEL_NAME" \
-  --enable_expert_parallel \
-  --trust-remote-code \
-  --host 0.0.0.0 \
-  --port $PORT > vllm.log 2>&1 &
+###############################################################################
+# 1. 가상환경
+###############################################################################
+[[ -d "$VENV_DIR" ]] || python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+VENV_PY="$VENV_DIR/bin/python"
+echo "[venv] $($VENV_PY -V)"
 
-# 7. 실행 확인 (최대 300초 대기)
-MAX_WAIT=300
-WAIT_TIME=0
+###############################################################################
+# 2. vLLM 설치 (cu118 pre-built 휠)
+###############################################################################
+if ! $VENV_PY - <<'PY' 2>/dev/null
+import importlib, sys; sys.exit(0 if importlib.util.find_spec("vllm") else 1)
+PY
+then
+  echo "[vLLM] cu118 사전 휠 설치 중…"
+  $VENV_PY -m pip install --upgrade pip wheel
+  $VENV_PY -m pip install "vllm[serve]==0.4.2"        # ← 빌드 없이 1분 내 완료
+else
+  echo "[vLLM] 이미 설치되어 있습니다."
+fi
 
-echo ""
-echo "[⌛] vLLM 서버가 포트 $PORT에서 열릴 때까지 대기 중... (최대 ${MAX_WAIT}s)"
+###############################################################################
+# 3. HF 토큰
+###############################################################################
+if [[ -z "${HUGGING_FACE_HUB_TOKEN:-}" ]]; then
+  read -s -p "🔑 HUGGING_FACE_HUB_TOKEN: " TOK; echo
+  export HUGGING_FACE_HUB_TOKEN="$TOK"
+fi
+export HF_HOME="$HF_CACHE"  VLLM_CACHE_ROOT="$VLLM_CACHE"
 
-while ! lsof -i :$PORT > /dev/null 2>&1; do
+###############################################################################
+# 4. 서버 기동
+###############################################################################
+echo -e "\n[🚀] vLLM 서버 실행 (포트: $PORT)"
+nohup $VENV_PY -m vllm.entrypoints.openai.api_server \
+      --model "$MODEL_NAME" \
+      --enable_expert_parallel \
+      --trust-remote-code \
+      --host 0.0.0.0 \
+      --port "$PORT"  > "$LOG_FILE" 2>&1 &
+
+PID=$!
+printf "[⌛] PID %s – 로딩 중…\n" "$PID"
+
+# 최대 300 초 포트 대기
+for _ in {1..150}; do
   sleep 2
-  WAIT_TIME=$((WAIT_TIME + 2))
-  if [ $WAIT_TIME -ge $MAX_WAIT ]; then
-    echo "❌ ${MAX_WAIT}초 내에 vLLM 서버가 시작되지 않았습니다. 로그(vllm.log)를 확인하세요."
-    exit 1
-  fi
+  lsof -i :"$PORT" &>/dev/null && {
+    echo "✅ vLLM 서버 실행 완료! (PID: $PID)"
+    echo "   tail -f $LOG_FILE"
+    exit 0
+  }
 done
+echo "❌ 300 초 내에 서버가 열리지 않았습니다. 로그($LOG_FILE) 확인!"
+exit 1
 
-VLLM_PID=$(lsof -i :$PORT -t)
-echo ""
-echo "✅ vLLM 서버가 정상적으로 실행 중입니다! (PID: $VLLM_PID)"
-echo "📄 실시간 로그 보기: tail -f vllm.log"
