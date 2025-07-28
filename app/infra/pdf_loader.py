@@ -20,9 +20,14 @@ class PdfLoader(PdfLoaderIF):
     Attributes
     ----------
     splitter : RecursiveCharacterTextSplitter
-        2 000자 청크 + 200자 오버랩 설정.
+        1500자 청크 + 200자 오버랩 설정.
     """
-    splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1500,
+        chunk_overlap=200,
+        separators=["\n\n", "\n", ". ", " ", ""],   # 문단→문장→단어
+    )
+
 
     async def load(self, url: str) -> List[TextChunk]:
         """PDF를 다운로드해 텍스트 청크 리스트로 반환한다.
