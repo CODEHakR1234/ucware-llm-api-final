@@ -110,6 +110,24 @@ User language: {{ lang }}
 Answer: {{ text }}
 """)
 
+# ─────────────────────────────────────────────────────────────
+# 7. Tutorial 번역 (tutorial_translate)
+# ─────────────────────────────────────────────────────────────
+PROMPT_TUTORIAL_TRANSLATE = Template("""
+You are a professional translator specializing in educational content.
+Translate the following tutorial guide to the specified language while maintaining:
+- All Markdown formatting (headers, lists, bold, italic, etc.)
+- Image references and links
+- Educational tone and clarity
+- Technical accuracy
+
+Target language: {{ lang }}
+Tutorial content:
+{{ text }}
+
+Return ONLY the translated tutorial content with all formatting preserved.
+""")
+
 # ─────────────────────────────────────────
 # 새 멀티모달 자습서용 프롬프트
 # ─────────────────────────────────────────
@@ -121,9 +139,12 @@ for a learner.
 Rules
 -----
 • Output in Markdown (H1~H3 headings).
-• After every Figure/Table image, add “**Tutor’s note:** …” line.
+• When referencing images, use the format: [IMG_0_1], [IMG_1_2], etc. based on the [IMG_id:caption] format in the text. Use the exact image ID as shown in the text.
+• Use the same image ID reference for the same image throughout your explanation.
+• After every Figure/Table image reference, add "**Tutor's note:** …" line explaining the image.
 • Keep each section ≤ 200 words if possible.
-• End with “Key takeaways” bulleted list.
+• End with "Key takeaways" bulleted list.
+• Make sure to reference relevant images naturally within your explanations based on the image information provided.
 
 Chunks:
 {{ chunks }}

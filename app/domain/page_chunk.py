@@ -1,6 +1,6 @@
 # app/domain/page_chunk.py
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Tuple
 from uuid import uuid4
 
 @dataclass
@@ -10,10 +10,10 @@ class PageChunk:
     --------------------
     • page  : 0-based page number  
     • text  : 본문 텍스트  
-    • figs  : 이 청크와 함께 보여줘야 할 figure/table URL 목록
+    • figs  : 이 청크와 함께 보여줘야 할 figure/table (image_id, uri) 튜플 목록
     """
     page: int
     text: str
-    figs: List[str] = field(default_factory=list)
+    figs: List[Tuple[str, str]] = field(default_factory=list)  # (image_id, uri) 튜플
     id: str = field(default_factory=lambda: uuid4().hex)  # optional
 

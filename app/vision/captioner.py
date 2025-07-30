@@ -34,6 +34,7 @@ class Captioner:
         prompt: str | None = None,
         max_tokens: int = 64,
     ) -> List[str]:
+
         """
         Args
         ----
@@ -48,21 +49,27 @@ class Captioner:
         if not images:
             return []
 
-        prompt = prompt or "Describe this image in 1-2 sentences."
+        # Captioner 서비스가 없을 경우 기본 캡션 반환
+        try:
+            prompt = prompt or "Describe this image in 1-2 sentences."
 
-        async def _gen_one(img: bytes) -> str:
-            # ① base64 인코딩 → TGI 멀티모달 JSON 스키마
-            payload = {
-                "prompt": prompt,
-                "images": [base64.b64encode(img).decode()],
-                "max_new_tokens": max_tokens,
-            }
-            # ② /generate POST
-            r = await self._cli.post(f"{self.endpoint}/generate", json=payload)
-            r.raise_for_status()
-            # ③ 결과 추출
-            return r.json().get("generated_text", "").strip()
+            async def _gen_one(img: bytes) -> str:
+                # ① base64 인코딩 → TGI 멀티모달 JSON 스키마
+                payload = {
+                    "prompt": prompt,
+                    "images": [base64.b64encode(img).decode()],
+                    "max_new_tokens": max_tokens,
+                }
+                # ② /generate POST
+                r = await self._cli.post(f"{self.endpoint}/generate", json=payload)
+                r.raise_for_status()
+                # ③ 결과 추출
+                return r.json().get("generated_text", "").strip()
 
-        # 여러 장 이미지를 비동기 병렬 처리
-        return await asyncio.gather(*(_gen_one(b) for b in images))
+            # 여러 장 이미지를 비동기 병렬 처리
+            return await asyncio.gather(*(_gen_one(b) for b in images))
+        except Exception as e:
+            print(f"[Captioner] 캡션 생성 실패, 기본 캡션 사용: {e}", flush=True)
+            # 기본 캡션 반환
+            return ["이미지" for _ in images]
 

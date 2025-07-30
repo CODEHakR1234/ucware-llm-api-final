@@ -10,7 +10,7 @@ from app.controller import (
     feedback_controller,
     pdf_tutorial_controller,
 )
-print("[DEBUG] main.py 시작됨", flush=True)
+print("[DEBUG] main.py 시작됨 - Tutorial 기능 포함", flush=True)
 
 app = FastAPI(title="Multi-Summary API")
 

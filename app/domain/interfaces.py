@@ -72,3 +72,22 @@ class CacheIF(Protocol):
     @abstractmethod
     def set_log(self, file_id:str, url:str, query:str, lang:str, msg:str) -> None: ...
 
+
+class SemanticGrouperIF(Protocol):
+    """PageChunk들을 의미 단위로 그룹화하는 인터페이스."""
+
+    @abstractmethod
+    def group_chunks(self, chunks: List[PageChunk]) -> List[List[PageChunk]]: ...
+
+    @abstractmethod
+    def set_similarity_threshold(self, threshold: float) -> None: ...
+
+    @abstractmethod
+    def set_max_gap_pages(self, max_gap: int) -> None: ...
+
+    @abstractmethod
+    def set_max_group_size(self, max_size: int) -> None: ...
+
+    @abstractmethod
+    def get_grouping_stats(self, chunks: List[PageChunk]) -> dict: ...
+

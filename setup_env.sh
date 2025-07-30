@@ -11,19 +11,7 @@ source .venv/bin/activate
 
 echo "[3] pip 패키지 설치 (공통)"
 pip install --upgrade pip
-pip install -r requirements.txt   # FastAPI/LangChain 등
-
-#───────────────────────── PaddleOCR 설치 ──────────────────────#
-CUDA_VER=$(nvidia-smi --query-gpu=cuda_version --format=csv,noheader | head -1 | cut -d'.' -f1-2)
-if [[ "$CUDA_VER" == 11.* ]]; then
-  PADDLE_WHEEL="paddlepaddle-gpu==2.6.1.post118"
-else
-  PADDLE_WHEEL="paddlepaddle-gpu==2.6.1.post120"
-fi
-EXTRA_URL="-f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html"
-
-echo "[3] PaddlePaddle GPU 휠 설치 (${PADDLE_WHEEL})"
-pip install "${PADDLE_WHEEL}" paddleocr rapidfuzz pillow ${EXTRA_URL}
+pip install -r requirements.txt   # FastAPI/LangChain/Docling 등
 
 # ──────────────── LLM / Embedding Provider 선택 ────────────────
 echo ""
@@ -67,8 +55,6 @@ LLM_MODEL_NAME=$LLM_MODEL_NAME
 OPENAI_API_KEY="$OPENAI_API_KEY"
 TAVILY_API_KEY="$TAVILY_API_KEY"
 CUDA_VISIBLE_DEVICES=$GPU_NUMBER
-# PaddleOCR 전용
-PADDLE_GPU_MEM=8000
 EOF
 
 echo "[✔] 환경 구성이 완료되었습니다."

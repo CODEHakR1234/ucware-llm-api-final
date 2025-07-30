@@ -1,122 +1,134 @@
-"""
-PDFReceiver  ★Partial-OCR + 멀티모달
-==================================
+"""PDFReceiver (Docling + SmolDocling)
+=====================================
 URL → List[PageElement]
 
-• fitz.open(stream=bytes)  – 임시파일 없이 메모리에서 바로 로드
-• 페이지 블록 분석
-    ├─ 긴 텍스트 블록          → PageElement(kind="text", content=str)
-    ├─ 짧은 텍스트·이미지 블록  → OCR / 이미지 bytes
-• asyncio + to_thread 로 완전 논블로킹 처리
+• Docling의 Markdown 결과를 읽어 페이지 흐름 그대로
+  PageElement(kind="text" | "figure") 리스트로 변환
+• data-URI 이미지는 base64 디코딩, 원격 URL은 병렬 다운로드(동시 8개)
+• OCR/PyMuPDF 제거로 속도 단축
 """
 
 from __future__ import annotations
 
-import asyncio
-from functools import lru_cache
-from typing import Final, List
-
+import asyncio, base64, re
+from typing import Final, List, Tuple
 import httpx
-import fitz                                       # PyMuPDF
-from paddleocr import PaddleOCR
-from PIL import Image
+
+from docling import DocumentConverter, VlmPipeline
+from docling.datamodel.base_models import InputFormat
+from docling.pipeline.vlm_pipeline import VlmPipeline
+from docling.datamodel import vlm_model_specs
 
 from app.domain.page_element import PageElement
 
-_TIMEOUT: Final[int] = 30
-_MAX_PDF_SIZE = 50 * 1024 * 1024   # 50 MB
+# ──────────────── 설정 ────────────────
+_TIMEOUT = httpx.Timeout(30.0)
+_IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
-# ────────────────────────── PaddleOCR 싱글턴 ──────────────────────────
-@lru_cache(maxsize=1)
-def get_paddle_ocr() -> PaddleOCR:
-    try:
-        return PaddleOCR(use_gpu=True, gpu_mem=8_000, lang="korean", show_log=False)
-    except Exception:
-        # GPU 없을 때 자동 CPU 모드
-        return PaddleOCR(use_gpu=False, lang="korean", show_log=False)
-# ────────────────────────── 튜닝 상수 ──────────────────────────
-_MIN_PLAIN_CHARS = 50     # 이보다 짧은 텍스트 블록이면 OCR 후보
-_MIN_PLAIN_WORDS = 10
-_MIN_IMG_AREA     = 8_000 # px² 이상인 이미지만 그림 후보
+# ──────────────── Docling 설정 ────────────────
+_converter = DocumentConverter(
+    vlm_pipeline=VlmPipeline(
+        model="SMOLDOCLING_PREVIEW",
+        embed_images=True
+    )
+)
 
-# ────────────────────────── 메인 클래스 ──────────────────────────
 class PDFReceiver:
-    """PDF URL → PageElement 리스트(텍스트 + 그림·표)."""
+    """
+    PDF URL → PageElement 리스트로 변환.
+    SmolDocling + Docling 기반으로 완전히 재작성.
+    """
 
     async def fetch_and_extract_elements(self, url: str) -> List[PageElement]:
-        pdf_bytes = await self._download(url)
-        return await self._extract_elements(pdf_bytes)
-
-    # --------------------------------------------------------------
-    async def _download(self, url: str) -> bytes:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as cli:
-            resp = await cli.get(url)
-            resp.raise_for_status()
-            if len(resp.content) > _MAX_PDF_SIZE:
-                raise ValueError("PDF too large (> 50 MB)")
-            return resp.content
-
-    # --------------------------------------------------------------
-    async def _extract_elements(self, pdf_bytes: bytes) -> List[PageElement]:
-        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-            tasks = [self._page_to_elements(doc, idx) for idx in range(doc.page_count)]
-            pages: List[List[PageElement]] = await asyncio.gather(*tasks)
-        # 2-D 리스트 → 1-D
-        return [el for pg in pages for el in pg]
-
-    # --------------------------------------------------------------
-    async def _page_to_elements(self, doc: fitz.Document, idx: int) -> List[PageElement]:
-        page   = doc.load_page(idx)
-        blocks = page.get_text("blocks")            # list of tuples
+        """
+        PDF URL에서 텍스트와 이미지를 추출하여 PageElement 리스트로 반환.
+        
+        Returns
+        -------
+        List[PageElement]
+            추출된 페이지 요소들 (text, figure, table, graph)
+        """
+        try:
+            print(f"[PDFReceiver] PDF 변환 시작: {url}", flush=True)
+            # Docling으로 PDF → Markdown 변환
+            doc = await _converter.convert(source=url)
+            markdown_content = doc.document.export_to_markdown()
+            print(f"[PDFReceiver] PDF 변환 완료: {len(markdown_content)}자", flush=True)
+            
+            # SmolDocling 페이지 구분자로 분할
+            # SmolDocling은 <page_break> 태그를 사용하거나 페이지 번호를 포함할 수 있음
+            if "<page_break>" in markdown_content:
+                pages = markdown_content.split("<page_break>")
+            elif "\f" in markdown_content:  # form feed character
+                pages = markdown_content.split("\f")
+            elif "\n---\n" in markdown_content:  # fallback
+                pages = markdown_content.split("\n---\n")
+            else:
+                # 페이지 구분자가 없으면 전체를 하나의 페이지로
+                pages = [markdown_content]
+            
+        except Exception as e:
+            raise ValueError(f"Docling PDF 변환 실패: {e}")
 
         elements: List[PageElement] = []
-        ocr_tasks: List[asyncio.Future] = []
+        remote_imgs: List[Tuple[int, str, str, str]] = []  # (page_idx, alt, url, img_id)
 
-        for blk in blocks:
-            x0, y0, x1, y1, btype = blk[:5]
-            bbox = (x0, y0, x1, y1)
+        for idx, pg_md in enumerate(pages):
+            image_counter = 1  # 페이지별로 이미지 ID 카운터 초기화
+            if not pg_md.strip():
+                continue
 
-            # ── 텍스트 블록 ──────────────────────────────────────
-            if btype == 0:
-                text = blk[4].strip() if len(blk) >= 6 else blk[5].strip()
-                if len(text) >= _MIN_PLAIN_CHARS or len(text.split()) >= _MIN_PLAIN_WORDS:
-                    elements.append(PageElement("text", idx, text))
-                else:  # 너무 짧으면 OCR 로 재검
-                    ocr_tasks.append(
-                        asyncio.to_thread(self._ocr_crop_text, page, bbox, idx)
-                    )
+            # (1) 텍스트 처리 먼저 - [IMG_{page}_{id}] 플레이스홀더 유지
+            def _placeholder(m: re.Match) -> str:
+                nonlocal image_counter
+                img_id = f"IMG_{idx}_{image_counter}"
+                image_counter += 1
+                return f"[{img_id}]"
 
-            # ── 이미지/표/그래프 블록 ────────────────────────────
-            elif btype == 1 and (x1 - x0) * (y1 - y0) >= _MIN_IMG_AREA:
-                img_bytes = self._crop_bytes(page, bbox)
-                elements.append(PageElement("figure", idx, img_bytes))
+            text_with_fig = _IMG_RE.sub(_placeholder, pg_md)
+            for para in re.split(r"\n{2,}", text_with_fig):
+                if para.strip():
+                    elements.append(PageElement("text", idx, para.strip()))
 
-        # OCR 결과 추가
-        if ocr_tasks:
-            elements += await asyncio.gather(*ocr_tasks)
+            # (2) 이미지 처리 - data-URI는 즉시 bytes로, remote는 수집
+            for alt, src in _IMG_RE.findall(pg_md):
+                img_id = f"IMG_{idx}_{image_counter}"
+                image_counter += 1
+                
+                if src.startswith("data:image"):
+                    # data-URI → bytes 변환
+                    _, b64 = src.split(",", 1)
+                    try:
+                        img_bytes = base64.b64decode(b64)
+                        elements.append(PageElement("figure", idx, img_bytes, caption=alt, id=img_id))
+                    except Exception:
+                        continue
+                else:
+                    # remote URL은 나중에 다운로드
+                    remote_imgs.append((idx, alt, src, img_id))
 
+        # (3) 원격 이미지 다운로드 (동시 8개 제한)
+        if remote_imgs:
+            sem = asyncio.Semaphore(8)
+            
+            async def _fetch(i: int, url: str):
+                async with sem:
+                    try:
+                        r = await cli.get(url, follow_redirects=True)
+                        return i, r
+                    except Exception as e:
+                        return i, e
+
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as cli:
+                resps = await asyncio.gather(*(_fetch(i, u) for i, _, u, _ in remote_imgs))
+
+            for (pg_idx, alt, _, img_id), (i, r) in zip(remote_imgs, resps):
+                if isinstance(r, Exception) or r.status_code != 200:
+                    continue
+                elements.append(PageElement("figure", pg_idx, r.content, caption=alt, id=img_id))
+
+        if not elements:
+            raise ValueError("Docling PDF 파싱 결과가 없습니다")
+        
+        print(f"[PDFReceiver] 요소 추출 완료: {len(elements)}개 (텍스트: {len([e for e in elements if e.kind == 'text'])}, 이미지: {len([e for e in elements if e.kind in ('figure', 'table', 'graph')])})", flush=True)
         return elements
-
-    # --------------------------------------------------------------
-    # helper: 크롭 PNG bytes
-    @staticmethod
-    def _crop_bytes(page: fitz.Page, bbox, dpi: int = 300) -> bytes:
-        rect = fitz.Rect(bbox)
-        mat  = fitz.Matrix(dpi / 72, dpi / 72)
-        pix  = page.get_pixmap(matrix=mat, clip=rect)
-        return pix.tobytes("png")
-
-    # helper: OCR 후 PageElement(text)
-    @staticmethod
-    def _ocr_crop_text(page: fitz.Page, bbox, page_no: int, dpi: int = 300) -> PageElement:
-        rect = fitz.Rect(bbox)
-        mat  = fitz.Matrix(dpi / 72, dpi / 72)
-        pix  = page.get_pixmap(matrix=mat, clip=rect)
-        img  = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-        text = " ".join(
-            seg[1][0] for seg in get_paddle_ocr().ocr(img, cls=False)[0]
-            if seg[1][0].strip()
-        )
-        return PageElement("text", page_no, text)
-

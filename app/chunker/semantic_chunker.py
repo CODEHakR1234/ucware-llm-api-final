@@ -1,10 +1,11 @@
 from __future__ import annotations
 import re
-from typing import List, Union
+from typing import List, Union, Optional
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from app.domain.page_element import PageElement
 from app.domain.page_chunk   import PageChunk          # ★ NEW
+from app.model.summary_dto import SummaryRequestDTO
 
 # ──────────────── 하이퍼 파라미터 ────────────────
 _MAX, _OVF, _OVL = 1_500, 1_800, 200
@@ -14,11 +15,12 @@ sent_split = RecursiveCharacterTextSplitter(
     separators=[". ", "!\n", "?\n"],
 )
 
-_HDR_H1 = re.compile(r"^((\d+[\.-])+ )?[IVXLCDM0-9]+\.\s|^[A-Z][A-Z\s\-]{3,}$")
-_HDR_H2 = re.compile(r"^\d+\.\d+\.?\s+.+")
-_HDR_H3 = re.compile(r"^\d+\.\d+\.\d+\.?\s+.+")
+_MD_HEADER = re.compile(r"^#{1,6}\s+.+")
+# bullets 그대로 유지 (시장점 필요)
 _BULLET = re.compile(r"^(\s*[\u2022\u2023\u25CF\-\*])|^\s*\d+\.\s+")
 _PAR_BR = re.compile(r"\n{2,}")
+# 플레이스홀더 패턴 추가
+_FIGURE_PLACEHOLDER = re.compile(r"\[FIGURE:([^\]]+)\]")
 
 # ─────────────────────────────────────────────────
 class SemanticChunker:
@@ -31,12 +33,18 @@ class SemanticChunker:
                        False 이면 plain str 을 돌려준다.
     """
 
+    def __init__(self, max_chunk_size: int = 1500, overflow_threshold: int = 1800, overlap: int = 200):
+        self.max_chunk_size = max_chunk_size
+        self.overflow_threshold = overflow_threshold
+        self.overlap = overlap
+
     def group(
         self,
         els: List[PageElement],
         *,
         return_pagechunk: bool = False
     ) -> List[Union[str, PageChunk]]:
+        print(f"[SemanticChunker] 청킹 시작: {len(els)}개 요소", flush=True)
         blocks, buf, figs = [], [], []
 
         def flush(page_no: int):
@@ -47,7 +55,7 @@ class SemanticChunker:
             joined = " ".join(buf).strip()
             texts  = (
                 sent_split.split_text(joined)
-                if len(joined) > _OVF
+                if len(joined) > self.overflow_threshold
                 else [joined]
             )
 
@@ -75,29 +83,23 @@ class SemanticChunker:
                     p = p.strip()
                     if not p:
                         continue
-                    if _HDR_H1.match(p):
+                    if _MD_HEADER.match(p):
                         flush(el.page_no)
-                        blocks.append(
-                            PageChunk(el.page_no, f"# {p}") if return_pagechunk else f"# {p}"
-                        )
-                    elif _HDR_H2.match(p):
-                        flush(el.page_no)
-                        buf.append(f"## {p}")
-                    elif _HDR_H3.match(p):
-                        flush(el.page_no)
-                        buf.append(f"### {p}")
+                        buf.append(p)
                     elif _BULLET.match(p):
                         buf.append(p)
                     else:
                         buf.append(p)
             else:  # figure / table / graph
-                img_md = f"![{el.caption or ''}]({el.content})"
-                buf.append(img_md)
-                figs.append(el.content)
+                # 이미지 정보만 수집 (플레이스홀더 교체는 하지 않음)
+                # content가 bytes인 경우 처리
+                content = el.content if isinstance(el.content, str) else "image_data"
+                figs.append((el.id, content))
 
-            if sum(len(x) for x in buf) > _MAX + _OVL:
+            if sum(len(x) for x in buf) > self.max_chunk_size + self.overlap:
                 flush(el.page_no)
 
         flush(last_page)
+        print(f"[SemanticChunker] 청킹 완료: {len(blocks)}개 청크", flush=True)
         return blocks
 

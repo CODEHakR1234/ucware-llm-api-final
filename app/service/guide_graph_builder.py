@@ -1,161 +1,381 @@
 # app/service/guide_graph_builder.py
 """GuideGraphBuilder – 멀티모달 PDF → 튜토리얼 Markdown
-entry·translate 노드를 제거한 경량 파이프라인.  
-**캐시 히트 시 즉시 종료** 로직도 삭제했다.
+도메인 기반 LangGraph 파이프라인 빌더.
+모든 노드는 최대 3회 재시도하며, 실패 시 에러 메시지를 기록하고 종료한다.
 """
 
 from __future__ import annotations
-
-import asyncio, time
+import time
+import asyncio
 from functools import wraps
-from typing import List, Optional, Awaitable, Callable
+from typing import Awaitable, Callable, List, Optional
 
-from langgraph.graph import StateGraph
+from langchain_core.prompts import PromptTemplate
+from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
 
-from app.domain.interfaces import PdfLoaderIF, VectorStoreIF, LlmChainIF, CacheIF
 from app.domain.page_chunk import PageChunk
-from app.utils.segment import segment_in_order
-from app.infra.embedder import get_embed_fn
-from app.prompts import PROMPT_TUTORIAL
+from app.domain.interfaces import (
+    PdfLoaderIF,
+    LlmChainIF,
+    SemanticGrouperIF,
+)
+from app.prompts import PROMPT_TUTORIAL, PROMPT_TUTORIAL_TRANSLATE
 
-# ---------------------------------------------------------------------
-_RETRY, _SLEEP = 3, 1
-
-
-def retry(fn: Callable[[BaseModel], Awaitable[BaseModel]]):
-    @wraps(fn)
-    async def _wrap(st):
-        for i in range(1, _RETRY + 1):
-            try:
-                t0 = time.perf_counter()
-                res = await fn(st)
-                st.log.append(f"{fn.__name__}:{i}:{int((time.perf_counter()-t0)*1000)}ms")
-                return res
-            except Exception as e:
-                if i == _RETRY:
-                    st.error = f"{fn.__name__} failed: {e}"
-                    return st
-                await asyncio.sleep(_SLEEP)
-    return _wrap
-
-
-# ---------------------------------------------------------------------
+# ──────────────── 상태 타입 ────────────────
 class GuideState(BaseModel):
+    """튜토리얼 생성 상태 모델."""
     file_id: str
     url: str
     lang: str
+    
+    chunks: List[PageChunk] = Field(default_factory=list)
+    sections: List[str] = Field(default_factory=list)
+    tutorial: Optional[str] = None
+    
+    cached: bool = False
+    error: Optional[str] = None
+    log: List[str] = Field(default_factory=list)
 
-    chunks:   Optional[List[PageChunk]] = None
-    tutorial: Optional[str]            = None
-    cached:   bool                     = False
-    error:    Optional[str]            = None
-    log:      List[str] = Field(default_factory=list)
+# ──────────────── Helper: safe-retry decorator ────────────────
+_RETRY = 3
+_SLEEP = 1  # seconds between retries
 
+def safe_retry(fn: Callable[[GuideState], Awaitable[GuideState]]):
+    """LangGraph 노드에 재시도 로직을 적용하는 데코레이터.
 
-# ---------------------------------------------------------------------
+    `_RETRY` 횟수만큼 재시도하며 마지막 실패 시 상태 객체에 에러를 기록한다.
+
+    Args:
+        fn: GuideState를 받아 비동기로 처리하는 함수이자 노드.
+
+    Returns:
+        자동 재시도 로직이 적용된 비동기 함수.
+    """
+    @wraps(fn)
+    async def _wrap(st: GuideState):  # type: ignore[override]
+        for attempt in range(1, _RETRY + 1):
+            try:
+                t0 = time.perf_counter()
+                result = await fn(st)
+                elapsed = int((time.perf_counter() - t0) * 1000)  # ms
+                st.log.append(
+                    f"{fn.__name__} attempt {attempt} [{elapsed}ms]"
+                )
+                return result
+            except Exception as exc:  # noqa: BLE001
+                if attempt == _RETRY:
+                    st.error = f"{fn.__name__} failed after {_RETRY} tries: {exc}"
+                    return st
+                await asyncio.sleep(_SLEEP)
+        return st  # nothing should reach here
+
+    return _wrap
+
+# ──────────────── Graph builder ────────────────
 class GuideGraphBuilder:
-    """PDF → Markdown 튜토리얼 파이프라인 (entry·translate·캐시-바이패스 버전)"""
+    """튜토리얼 생성 그래프를 빌드하는 LangGraph 파이프라인 생성기.
+
+    Attributes:
+        loader: PDF 로더 (URL → PageChunk 리스트).
+        grouper: 의미 단위 청크 그룹화기.
+        llm: LangChain 호환 LLM 실행기.
+    """
 
     def __init__(
         self,
         loader: PdfLoaderIF,
-        store : VectorStoreIF,
-        llm   : LlmChainIF,
-        cache : CacheIF,
+        grouper: SemanticGrouperIF,
+        llm: LlmChainIF,
     ):
-        self.loader, self.store, self.llm, self.cache = loader, store, llm, cache
-        self.embed_fn = get_embed_fn()
+        self.loader = loader
+        self.grouper = grouper
+        self.llm = llm
 
-    # ------------------------------------------------------------------
-    def build(self):
+    def build(self) -> StateGraph:
+        """튜토리얼 생성 그래프를 빌드한다."""
         g = StateGraph(GuideState)
 
-        # 1) load  ────────────────────────────────────────────────────
-        @retry
-        async def load(st: GuideState):
-            # 캐시 존재 여부만 기록(저장 단계에서 중복 저지를 위해 사용)
-            st.cached = self.cache.exists_summary(st.file_id)
+        # 1. Load PDF ---------------------------------------------------
+        @safe_retry
+        async def load_pdf(st: GuideState):
+            """PDF를 로드하여 청크로 변환한다.
 
-            # 항상 PDF를 새로 읽어 들인다 (캐시 히트여도 바이패스)
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                텍스트 청크가 추가된 상태 객체.
+            """
+            print(f"[GuideGraphBuilder] PDF 로딩 시작: {st.url}", flush=True)
             st.chunks = await self.loader.load(st.url, with_figures=True)
+            print(f"[GuideGraphBuilder] PDF 로딩 완료: {len(st.chunks)}개 청크", flush=True)
             return st
-        g.add_node("load", load)
 
-        # 2) embed ────────────────────────────────────────────────────
-        @retry
-        async def embed(st: GuideState):
-            if st.chunks and not await self.store.has_chunks(st.file_id):
-                await self.store.upsert([c.text for c in st.chunks], st.file_id)
-            return st
-        g.add_node("embed", embed)
+        g.add_node("load", load_pdf)
 
-        # 3) generate ─────────────────────────────────────────────────
-        @retry
-        async def generate(st: GuideState):
-            segments = segment_in_order(st.chunks or [], self.embed_fn)
+        # 2. Generate sections -------------------------------------------
+        @safe_retry
+        async def generate_sections(st: GuideState):
+            """자습서 섹션들을 생성한다.
 
-            async def _make_md(pages, grp):
-                # (1) 섹션용 프롬프트
-                prompt = PROMPT_TUTORIAL.render(
-                    chunks="\n".join(c.text for c in grp)[:6_000]  # 6k 토큰 이하로 컷
-                )
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                생성된 섹션들이 추가된 상태 객체.
+            """
+            if not st.chunks:
+                raise ValueError("PDF 청크가 없습니다. PDF 로딩에 실패했거나 내용이 비어있습니다.")
+            
+            if not isinstance(st.chunks[0], PageChunk):
+                raise ValueError("잘못된 청크 형식입니다. PageChunk 객체가 필요합니다.")
+            
+            sections = []
+            
+            # SemanticGrouper를 사용한 청크 그룹화
+            print(f"[GuideGraphBuilder] 청크 그룹화 시작: {len(st.chunks)}개 청크", flush=True)
+            groups = self.grouper.group_chunks(st.chunks)
+            st.log.append(f"청크 그룹화 완료: {len(groups)}개 그룹")
+            print(f"[GuideGraphBuilder] 청크 그룹화 완료: {len(groups)}개 그룹", flush=True)
+            
+            # 각 그룹별로 섹션 생성
+            for i, grp in enumerate(groups, 1):
+                st.log.append(f"그룹 {i} 처리 중: {len(grp)}개 청크")
+                print(f"[GuideGraphBuilder] 그룹 {i} 처리 중: {len(grp)}개 청크", flush=True)
+                
+                # 이미지 ID → URI 매핑 생성
+                image_mapping = self._create_image_mapping(grp)
+                
+                # 청크 텍스트를 그대로 LLM에 전달 ([IMG_id:caption] 형태)
+                chunks_text = "\n".join(c.text for c in grp)[:6_000]
+                prompt = PROMPT_TUTORIAL.render(chunks=chunks_text)
+                
                 section = await self.llm.execute(prompt)
-                # (2) 머리글·이미지 추가
-                header = f"## Pages {pages[0]+1}–{pages[-1]+1}"
-                figs   = "\n".join(
-                    f"![figure]({u})\n**Tutor’s note:** "
-                    for u in {u for c in grp for u in c.figs}
-                )
-                return f"{header}\n\n{section}\n\n{figs}"
+                
+                # 이미지 ID를 실제 URI로 교체
+                section_with_images = self._replace_image_ids_with_uris(section, image_mapping)
+                sections.append(section_with_images)
+                
+                st.log.append(f"그룹 {i} 섹션 생성 완료")
+                print(f"[GuideGraphBuilder] 그룹 {i} 섹션 생성 완료", flush=True)
 
-            # ↙︎ 비동기 병렬 실행
-            parts = await asyncio.gather(*(_make_md(p, g) for p, g in segments))
-            st.tutorial = "\n\n".join(parts) + "\n\n---\n\n"
+            st.sections = sections
+            print(f"[GuideGraphBuilder] 모든 섹션 생성 완료: {len(sections)}개", flush=True)
             return st
-        g.add_node("generate", generate)
 
-        # 4) save ─────────────────────────────────────────────────────
-        async def save(st: GuideState):
-            # 캐시에 없을 때만 저장
-            if not st.cached and st.tutorial:
-                self.cache.set_summary(st.file_id, st.tutorial)
+        g.add_node("generate", generate_sections)
+
+        # 3. Combine sections --------------------------------------------
+        @safe_retry
+        async def combine_sections(st: GuideState):
+            """섹션들을 하나의 일관된 Markdown 문서로 통합한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                통합된 튜토리얼이 추가된 상태 객체.
+            """
+            if not st.sections:
+                raise ValueError("sections is empty — cannot combine")
+            
+            print(f"[GuideGraphBuilder] 섹션 통합 시작: {len(st.sections)}개 섹션", flush=True)
+            # 문서 구조 생성
+            combined_doc = self._create_document_structure(st.sections)
+            st.tutorial = combined_doc
+            print(f"[GuideGraphBuilder] 섹션 통합 완료: {len(st.tutorial)}자", flush=True)
+            
             return st
-        g.add_node("save", save)
 
-        # 5) finish ───────────────────────────────────────────────────
-        async def finish(st: GuideState):
-            msg = st.error or " | ".join(st.log)
-            try:
-                self.cache.set_log(st.file_id, st.url, "TUTORIAL", st.lang, msg)
-            except Exception:
-                ...
+        g.add_node("combine", combine_sections)
+
+        # 4. Translate tutorial ------------------------------------------
+        @safe_retry
+        async def translate_tutorial(st: GuideState):
+            """필요한 경우 tutorial을 번역한다.
+
+            Args:
+                st: 현재 요청 상태.
+
+            Returns:
+                번역된 튜토리얼이 추가된 상태 객체.
+            """
+            if not st.tutorial:
+                raise ValueError("tutorial is empty — cannot translate")
+            
+            if st.lang != "en":
+                print(f"[GuideGraphBuilder] 번역 시작: {st.lang}", flush=True)
+                prompt = PROMPT_TUTORIAL_TRANSLATE.render(lang=st.lang, text=st.tutorial)
+                st.tutorial = await self.llm.execute(prompt)
+                print(f"[GuideGraphBuilder] 번역 완료", flush=True)
+            else:
+                print(f"[GuideGraphBuilder] 번역 생략 (영어)", flush=True)
+            
             return st
-        g.add_node("finish", finish)
 
-        # ------------------------------------------------------------------
-        # Routing
-        # ------------------------------------------------------------------
+        g.add_node("translate", translate_tutorial)
+
+        # Routing -------------------------------------------------------
         g.set_entry_point("load")
 
         def post_load(st: GuideState) -> str:
-            return "finish" if st.error else "embed"
+            return "finish" if st.error else "generate"
+
         g.add_conditional_edges("load", post_load, {
-            "embed":  "embed",
+            "generate": "generate",
             "finish": "finish",
         })
-
-        g.add_edge("embed", "generate")
 
         def post_generate(st: GuideState) -> str:
-            return "finish" if st.error else "save"
+            return "finish" if st.error else "combine"
+
         g.add_conditional_edges("generate", post_generate, {
-            "save":   "save",
+            "combine": "combine",
             "finish": "finish",
         })
 
-        g.add_edge("save", "finish")
+        def post_combine(st: GuideState) -> str:
+            return "finish" if st.error else "translate"
+
+        g.add_conditional_edges("combine", post_combine, {
+            "translate": "translate",
+            "finish": "finish",
+        })
+
+        # Finish node 추가
+        async def finish_node(st: GuideState):
+            """튜토리얼 생성 프로세스가 종료되면 실행 로그를 기록한다."""
+            if st.error:
+                st.log.append(f"에러로 종료: {st.error}")
+                print(f"[GuideGraphBuilder] 에러로 종료: {st.error}", flush=True)
+            else:
+                st.log.append("튜토리얼 생성 완료")
+                print(f"[GuideGraphBuilder] 튜토리얼 생성 완료", flush=True)
+            return st
+
+        g.add_node("finish", finish_node)
+        g.add_edge("translate", "finish")
 
         g.set_finish_point("finish")
         return g.compile()
+
+    # ──────────────── Helper methods ────────────────
+    def _create_image_mapping(self, chunks: List[PageChunk]) -> dict:
+        """청크에서 이미지 ID를 URI로 매핑하는 딕셔너리 생성."""
+        image_mapping = {}
+        
+        for chunk in chunks:
+            for img_id, uri in chunk.figs:
+                image_mapping[img_id] = uri
+        
+        return image_mapping
+
+    def _replace_image_ids_with_uris(self, section: str, image_mapping: dict) -> str:
+        """섹션에서 이미지 ID [IMG_X]를 실제 URI로 교체."""
+        import re
+        
+        # [IMG_X] 패턴을 찾아서 실제 이미지 태그로 교체
+        def replace_image_id(match):
+            img_id = match.group(1)
+            if img_id in image_mapping:
+                uri = image_mapping[img_id]
+                return f"![figure]({uri})"
+            return match.group(0)  # 매핑이 없으면 원본 유지
+        
+        # [IMG_X_Y] 패턴을 찾아서 교체 (페이지_번호 형식)
+        section_with_images = re.sub(r'\[(IMG_\d+_\d+)\]', replace_image_id, section)
+        
+        return section_with_images
+
+    def _create_document_structure(self, sections: List[str]) -> str:
+        """섹션들을 하나의 일관된 Markdown 문서로 통합한다."""
+        if not sections:
+            return ""
+            
+        # 문서 시작
+        combined = "# 자습서 가이드\n\n"
+        
+        # 목차 생성
+        combined += "## 목차\n\n"
+        for i, section in enumerate(sections, 1):
+            # 섹션에서 제목 추출
+            title = self._extract_section_title(section)
+            if title:
+                # URL 친화적인 앵커 생성
+                anchor = self._create_anchor(title)
+                combined += f"{i}. [{title}](#{anchor})\n"
+                
+                # 하위 섹션들도 목차에 추가
+                subsections = self._extract_subsections(section)
+                for j, subsection in enumerate(subsections, 1):
+                    sub_anchor = self._create_anchor(subsection)
+                    combined += f"   {i}.{j}. [{subsection}](#{sub_anchor})\n"
+            else:
+                combined += f"{i}. [섹션 {i}](#section-{i})\n"
+        combined += "\n---\n\n"
+        
+        # 섹션들을 순서대로 추가
+        for i, section in enumerate(sections, 1):
+            # 섹션 번호와 제목 추가
+            title = self._extract_section_title(section)
+            if title:
+                section_with_number = f"## {i}. {title}\n\n"
+                # 원본 섹션에서 첫 번째 헤더 제거하고 나머지 내용만 추가
+                content = self._remove_first_header(section)
+                combined += section_with_number + content
+            else:
+                # 제목이 없으면 섹션 번호만 추가
+                combined += f"## {i}. 섹션\n\n{section.strip()}\n\n"
+            
+            # 섹션 간 구분자 (마지막 섹션 제외)
+            if i < len(sections):
+                combined += "---\n\n"
+        
+        return combined
+
+    def _extract_section_title(self, section: str) -> str:
+        """섹션에서 제목을 추출한다."""
+        lines = section.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            # 마크다운 헤더에서 제목 추출
+            if line.startswith('#') and len(line) > 1:
+                return line.lstrip('#').strip()
+        return ""
+
+    def _remove_first_header(self, section: str) -> str:
+        """섹션에서 첫 번째 헤더를 제거한다."""
+        lines = section.strip().split('\n')
+        result_lines = []
+        header_removed = False
+        
+        for line in lines:
+            if not header_removed and line.strip().startswith('#') and len(line.strip()) > 1:
+                header_removed = True
+                continue
+            result_lines.append(line)
+        
+        return '\n'.join(result_lines).strip()
+
+    def _create_anchor(self, title: str) -> str:
+        """제목에서 URL 친화적인 앵커를 생성한다."""
+        import re
+        # 소문자로 변환하고 특수문자 제거
+        anchor = re.sub(r'[^\w\s-]', '', title.lower())
+        # 공백을 하이픈으로 변환
+        anchor = re.sub(r'[-\s]+', '-', anchor)
+        return anchor
+
+    def _extract_subsections(self, section: str) -> List[str]:
+        """섹션에서 하위 섹션 제목들을 추출한다."""
+        subsections = []
+        lines = section.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            # H2 헤더 (##)를 하위 섹션으로 인식
+            if line.startswith('##') and len(line) > 2:
+                title = line.lstrip('#').strip()
+                subsections.append(title)
+        return subsections
 
