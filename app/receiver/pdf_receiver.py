@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio, base64, re
 from typing import Final, List, Tuple
 import httpx
+import torch
 
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
@@ -26,16 +27,39 @@ from app.domain.page_element import PageElement
 _TIMEOUT = httpx.Timeout(30.0)
 _IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
+# GPU 최적화 설정
+if torch.cuda.is_available():
+    # GPU 메모리 할당 최적화
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+
 # ──────────────── Docling 설정 ────────────────
-# SmolDocling 기본 모델 사용
+# GPU 가속을 위한 VLM 파이프라인 옵션 설정
+_vlm_options = VlmPipelineOptions(
+    model_spec=vlm_model_specs.SMOLDOCLING_VLM_SPEC,
+    device="cuda" if torch.cuda.is_available() else "cpu",  # GPU 우선 사용
+    batch_size=4,  # GPU 메모리에 맞게 배치 크기 조정
+    max_new_tokens=512,
+    temperature=0.1,
+    use_flash_attention=True,  # GPU 메모리 효율성 향상
+    use_cache=True,  # KV 캐시 사용으로 속도 향상
+    torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,  # GPU에서 half precision 사용
+)
+
 _converter = DocumentConverter(
     format_options={
         InputFormat.PDF: PdfFormatOption(
-            pipeline_cls=VlmPipeline
+            pipeline_cls=VlmPipeline,
+            pipeline_options=_vlm_options
         )
     }
 )
-print("[PDFReceiver] SmolDocling 기본 모델 초기화 완료", flush=True)
+
+device_info = "GPU" if torch.cuda.is_available() else "CPU"
+print(f"[PDFReceiver] Docling 초기화 완료 - {device_info} 모드", flush=True)
+if torch.cuda.is_available():
+    print(f"[PDFReceiver] GPU: {torch.cuda.get_device_name(0)}", flush=True)
 
 class PDFReceiver:
     """
@@ -46,6 +70,7 @@ class PDFReceiver:
     async def fetch_and_extract_elements(self, url: str) -> List[PageElement]:
         """
         PDF URL에서 텍스트와 이미지를 추출하여 PageElement 리스트로 반환.
+        GPU 가속을 사용하여 처리 속도를 향상시킵니다.
         
         Returns
         -------
@@ -54,10 +79,23 @@ class PDFReceiver:
         """
         try:
             print(f"[PDFReceiver] PDF 변환 시작: {url}", flush=True)
-            # Docling으로 PDF → Markdown 변환 (올바른 호출 방법)
+            
+            # GPU 메모리 최적화 설정
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()  # GPU 메모리 정리
+                start_memory = torch.cuda.memory_allocated(0)
+                print(f"[PDFReceiver] GPU 메모리 사용량: {start_memory / 1024**3:.2f}GB", flush=True)
+            
+            # Docling으로 PDF → Markdown 변환 (GPU 가속)
             doc = _converter.convert(source=url).document
             markdown_content = doc.export_to_markdown()
             print(f"[PDFReceiver] PDF 변환 완료: {len(markdown_content)}자", flush=True)
+            
+            # GPU 메모리 사용량 모니터링
+            if torch.cuda.is_available():
+                end_memory = torch.cuda.memory_allocated(0)
+                memory_used = (end_memory - start_memory) / 1024**3
+                print(f"[PDFReceiver] GPU 메모리 사용량 변화: {memory_used:.2f}GB", flush=True)
             
             # SmolDocling 페이지 구분자로 분할
             # SmolDocling은 <page_break> 태그를 사용하거나 페이지 번호를 포함할 수 있음
