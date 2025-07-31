@@ -8,6 +8,7 @@ bytes 이미지 리스트 → 캡션 문자열 리스트 (동일 인덱스 매�
 ---------
 CAPTION_ENDPOINT=http://pali:8080/v1      # TGI 서버 /v1 루트
 CAPTION_TIMEOUT=30                        # (옵션) 호출 타임아웃
+DISABLE_CAPTIONING=false                  # (옵션) 캡셔닝 비활성화 (테스트용)
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ class Captioner:
         self._cli = httpx.AsyncClient(
             timeout=int(os.getenv("CAPTION_TIMEOUT", timeout or 30))
         )
+        # 테스트용 캡셔닝 비활성화 옵션
+        self.disabled = os.getenv("DISABLE_CAPTIONING", "false").lower() == "true"
 
     # ─────────────────────────────────────────────────────────
     async def caption(
@@ -48,6 +51,11 @@ class Captioner:
         """
         if not images:
             return []
+
+        # 테스트용 캡셔닝 비활성화
+        if self.disabled:
+            print(f"[Captioner] 캡셔닝 비활성화됨 (DISABLE_CAPTIONING=true), 기본 캡션 사용: {len(images)}개 이미지", flush=True)
+            return ["이미지" for _ in images]
 
         # Captioner 서비스가 없을 경우 기본 캡션 반환
         try:

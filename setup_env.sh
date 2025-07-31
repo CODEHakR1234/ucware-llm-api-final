@@ -55,6 +55,8 @@ LLM_MODEL_NAME=$LLM_MODEL_NAME
 OPENAI_API_KEY="$OPENAI_API_KEY"
 TAVILY_API_KEY="$TAVILY_API_KEY"
 CUDA_VISIBLE_DEVICES=$GPU_NUMBER
+# 테스트용 캡셔닝 비활성화 (true로 설정하면 캡셔닝 서비스 호출 안함)
+DISABLE_CAPTIONING=false
 EOF
 
 echo "[✔] 환경 구성이 완료되었습니다."
