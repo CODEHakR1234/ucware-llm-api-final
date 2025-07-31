@@ -1,27 +1,35 @@
 # app/infra/cache_store.py
+
+"""cache_store.py
+Redis 캐시 어댑터.
+
+서비스 레이어는 이 클래스를 통해서만 캐시 계층에 접근한다. 덕분에 Redis 외의
+다른 캐시 구현(Memcached 등)으로 교체하기 쉽다.
+"""
+
 from typing import Optional
 from app.domain.interfaces import CacheIF
 from app.cache.cache_db import get_cache_db  # RedisCacheDB 싱글턴 반환
 
 
 class CacheStore(CacheIF):
-    """CacheIF(Port)를 만족하는 최소 어댑터.
+    """CacheIF 구현체.
 
-    RedisCacheDB 의 메서드를 그대로 위·아래로 전달만 한다.
-    Service 레이어는 CacheIF 타입만 의존하므로,
-    나중에 InMemoryCache·MemcachedCache 로도 교체 가능하다.
+    Attributes
+    ----------
+    cache : RedisCacheDB
+        내부에서 재사용하는 Redis 싱글턴.
     """
 
     def __init__(self):
-        self.cache = get_cache_db()   # RedisCacheDB 인스턴스
+        # Redis 연결은 싱글턴으로 관리한다.
+        self.cache = get_cache_db() 
 
-    # ---- CacheIF 구현 ----
+    # ───────────────────── CacheIF 구현 ─────────────────────
     def get_summary(self, key: str) -> Optional[str]:
         return self.cache.get_pdf(key)
 
     def set_summary(self, key: str, summary: str) -> None:
-        # RedisCacheDB.set_pdf 가 ttl 파라미터를 받아들인다면 전달,
-        # 아니라면 기본 TTL 로 저장
         self.cache.set_pdf(key, summary)
 
     def exists_summary(self, key: str) -> bool:
@@ -31,11 +39,3 @@ class CacheStore(CacheIF):
         """PDF 처리 단계별 로그를 Redis(HSET) 에 기록한다."""
         self.cache.set_log(file_id, url, query, lang, msg)
 
-# -------------------------------
-# ✅ FastAPI Depends용 provider
-# -------------------------------
-#_cache_singleton = CacheStore()          # 한 번만 생성
-
-#def get_cache_store() -> CacheIF:
-#    """CacheIF 구현체(현재 Redis 기반) 싱글턴을 반환"""
-#    return _cache_singleton
