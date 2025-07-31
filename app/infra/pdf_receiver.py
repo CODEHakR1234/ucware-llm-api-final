@@ -11,12 +11,11 @@ import httpx                # ✅ async HTTP client
 from PIL import Image, ImageOps
 import pytesseract
 import fitz                 # PyMuPDF
-from app.domain.interfaces import PdfReceiverIF
 
 _TIMEOUT: Final[int] = 30  # seconds
 
 
-class PDFReceiver(PdfReceiverIF):
+class PDFReceiver:
     """PDF 링크 처리기.
 
     PDF 링크를 받아 다운로드하고, 내부 텍스트와 OCR 기반 내용을 추출한다.

@@ -1,7 +1,7 @@
 # app/controller/pdf_summary_controller.py
 
 from fastapi import APIRouter, Depends, HTTPException
-from app.model.summary_dto import SummaryRequestDTO
+from app.dto.summary_dto import SummaryRequestDTO
 
 # 새로 만든 LangGraph 서비스 래퍼
 from app.service.summary_service_graph import (
