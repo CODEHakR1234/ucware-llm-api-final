@@ -25,7 +25,7 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain.chains.summarize import load_summarize_chain
 from langchain.docstore.document import Document
 
-from app.utils.llm_factory import get_llm_instance
+from app.infra.llm_factory import get_llm_instance
 from app.domain.interfaces import LlmChainIF, TextChunk
 
 # ───────────────────── 프롬프트 템플릿 정의 ─────────────────────

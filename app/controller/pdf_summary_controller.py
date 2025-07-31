@@ -12,7 +12,7 @@ PDF 요약 생성 엔드포인트.
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.model.summary_dto import SummaryRequestDTO
+from app.dto.summary_dto import SummaryRequestDTO
 from app.service.summary_service_graph import (
     SummaryServiceGraph,
     get_summary_service_graph,  # FastAPI Depends용

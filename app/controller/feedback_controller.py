@@ -15,7 +15,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, status
 
 # 내부 모듈 --------------------------------------------------------------
-from app.model.feedback_dto import FeedbackCreate, FeedbackOut
+from app.dto.feedback_dto import FeedbackCreate, FeedbackOut
 from app.cache.cache_db import get_cache_db     
 
 # ────────────────────────── Router 설정 ────────────────────────────────

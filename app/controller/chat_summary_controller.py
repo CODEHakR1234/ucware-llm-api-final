@@ -10,7 +10,7 @@
 """
 
 from fastapi import APIRouter, Depends
-from app.model.chat_summary_dto import ChatSummaryRequestDTO
+from app.dto.chat_summary_dto import ChatSummaryRequestDTO
 from app.service.chat_summary_graph import (
     ChatSummaryGraph,
     get_chat_summary_graph,

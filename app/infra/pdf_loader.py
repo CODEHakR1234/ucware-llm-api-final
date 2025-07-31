@@ -11,7 +11,7 @@ from typing import List
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from app.domain.interfaces import PdfLoaderIF, TextChunk
-from app.receiver.pdf_receiver import PDFReceiver
+from app.infra.pdf_receiver import PDFReceiver
 
 
 class PdfLoader(PdfLoaderIF):
