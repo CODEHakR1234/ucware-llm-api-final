@@ -1,185 +1,162 @@
-# 🧠 ucware-llm-api-startup_LOB
 
-`ucware-llm-api-v1`는 PDF 문서와 채팅 대화의 요약 기능을 제공하는 FastAPI 기반 멀티 요약 API입니다.
-LangChain 0.2+ 구조를 따르며, OpenAI GPT, Chroma 벡터 DB, Redis 캐시를 통합해 대규모 문서도 빠르고 정확하게 요약할 수 있습니다.
+# UCWARE LLM API  
+___
+UCWARE LLM API는 PDF 문서 및 채팅 기록에 대한 요약 / 질의응답 기능을 제공하는 서비스입니다.
 
----
+## I. Features
+___
+- PDF 문서 / 채팅 기록 요약: PDF 문서 및 채팅 데이터를 업로드하면 핵심 내용을 자동으로 요약하여 제공합니다.
+- 사용자 질의응답: 문서나 대화 기록을 바탕으로 한 Q&A 기능을 제공합니다. Tavily API Key가 제공될 경우 웹 검색 또한 가능합니다.
+- 캐싱 및 재사용: 동일한 파일에 대한 반복 요청 시 결과를 Redis 캐시에서 즉시 반환하여 응답 속도를 높입니다. 벡터 임베딩도 최초 1회 생성 후 DB에 저장되므로 이후부터 빠르게 검색합니다.  
+- 피드백 수집: 사용자로부터 요약/답변에 대한 평점(1~5)과 의견을 받아 품질 향상에 활용할 수 있습니다.
 
-## 🌟 주요 특징
+## II. Setup
+___
+### 0. Requirements
+- 이 서비스를 이용하기 위해서 아래와 같은 환경이 요구됩니다: 
+	- OpenAI API Token (OpenAI LLM 이용시)
+	- Tavily API Key (Web Search 이용시)
+	- HuggingFace Hub Token (vLLM 이용시)
 
-* 📄 **PDF 요약**: 웹 링크 기반 PDF 다운로드 및 요약 처리
-* 💬 **채팅 대화 요약**: 시간 순 정렬된 대화 데이터 요약
-* ⚙️ **최신 LangChain 구조**: `langchain-openai`, `langchain-chroma` 사용
-* 🧠 **LLM 기반 요약**: OpenAI GPT-3.5 또는 GPT-4 지원
-* 💾 **Chroma Vector DB**: 벡터 임베딩을 저장 및 유사도 검색
-* ⚡ **Redis 캐시**: 중복 요약 요청 방지 및 응답 속도 향상
-
----
-
-## 🚀 빠른 시작 (KT Cloud / 리눅스 서버 환경 기준)
-
-### ✅ 0. 프로젝트 클론 및 실행 권한 부여
-
+### 1. 의존성 설치 및 가상환경 구성
 ```bash
-git clone https://github.com/CODEHakR1234/ucware-llm-api-v1.git
-cd ucware-llm-api-v1
-chmod +x scripts/*.sh
-chmod +x run_all.sh
-chmod +x setup_env.sh
-chmod +x run_vllm.sh
-
-=>(vllm 모델 서버 작동) 
-./run_vllm.sh
-
-=>실행 환경 설정
-./setup_env.sh
-
-=> 빠른 시작
-./run_all.sh
+bash setup_env.sh
 ```
-## ✅ 1. KT Cloud vLLM 서버 구동
+   - 서비스 사용을 위한 사전 환경 설정을 진행합니다.
+   - 수행 기능 목록:
+	   - 시스템 패키지 및 requirements.txt 기반 pip 패키지 설치
+	   - llm 제공자 선택(OpenAI, HuggingFace)
+	   - 서비스 사용에 필요한 환경 변수 설정(`OPENAI_API_KEY`, `TAVILY_API_KEY`를 받아옴. 다른 환경 변수들은 쉘파일 내 하드코딩되어있으므로 유동적으로 변경.)
+	   - 환경변수를 저장해둘 `.env` 파일 자동 생성
 
-KT Cloud 인스턴스에서 Hugging Face 기반 LLM을 `vLLM` 서버로 구동하여, OpenAI API 호환 인터페이스로 외부 서비스와 연결할 수 있습니다.  
-이 서버는 사용자가 입력한 모델을 자동으로 로딩하며, FastAPI와 같은 애플리케이션은 이를 `http://localhost:12000/v1`으로 호출하여 사용할 수 있습니다.
-
-### 📌 주요 특징
-
-- **vLLM 기반 OpenAI 호환 API 서버** 백그라운드 실행
-- **모델 이름 직접 입력 가능**, 기본값은 `google/gemma-7b-it`
-- **Hugging Face 토큰**은 실행 시 안전하게 입력받음 (입력값 숨김 처리)
-- 실행된 서버는 **포트 12000**에서 대기하며, 로그는 `vllm.log`에 저장됨
-- **모델 로딩 완료까지 자동 대기** (최대 180초까지 포트 오픈 감지)
-
----
-
-### ▶️ 실행 방법
+### 2. (선택) 로컬 LLM 서버 실행
 
 ```bash
-./run_vllm.sh
+bash run_vllm.sh
 ```
 
-### ✅ 2. 환경 설정 및 의존성 설치
-
-프로젝트 실행을 위한 필수 패키지와 Python 가상환경을 자동으로 구성하는 단계입니다.
-이 과정을 통해 Redis, OCR 도구, PDF 처리 도구, Python 의존성 등이 설치되며, `.env` 파일도 자동 생성됩니다.
-
-#### 📌 실행 명령어
-
+   - vllm을 이용해 llm 모델을 서빙합니다. `1. 의존성 설치 및 가상환경 구성` 에서 llm 제공자를 OpenAI로 선택했다면 이 단계는 생략합니다.
+   - `HUGGING_FACE_HUB_TOKEN`을 입력받습니다. 필요하지 않은 경우 공란으로 넘어갑니다.
+   - 기본적으로 12000번 포트, `Qwen/Qwen3-30B-A3B-GPTQ-Int4` 모델을 이용하도록 설계되어있으며 유동적으로 변경이 가능합니다.
+   - 아래 명령어를 이용해 서버를 종료할 수 있습니다
 ```bash
-./setup_env.sh
+bash scripts/stop_vllm.sh   
+```
+  
+
+### 3. 서비스 전체 실행
+
+   ```bash
+   bash run_all.sh
+   ```
+
+   - 서비스 시작을 위해 Redis, Chroma(DB), FastAPI 서버를 구동합니다.
+   - 기본 포트는 아래와 같습니다.
+
+|     서버     |        포트        |
+| :--------: | :--------------: |
+|   Redis    |       6379       |
+| Chroma(DB) |       9000       |
+|  FastAPI   | 사용자 입력(기본값 8000) |
+- 아래 명령어로 서버를 종료할 수 있습니다.
+```bash
+bash scripts/stop_services.sh
+```
+## III. Usage
+___
+
+### 1. PDF 요약 및 질의 (POST `/api/summary`)
+- `query`가 `SUMMARY_ALL` 인 경우 `summary` 필드에 전체 요약문을 출력합니다.
+- `SUMMARY_ALL` 이외의 `query`인 경우 자체적으로 사용자의 질문이라 판단해 답변을 `answer` 필드에 출력합니다.
+
+-  요청 바디 예문:
+```json
+{
+  "file_id": "fid_abc123",
+  "pdf_url": "https://example.com/sample.pdf",
+  "query": "SUMMARY_ALL",
+  "lang": "KO"
+}
 ```
 
-#### 🛠️ 수행 작업
+- 응답 바디 예문:
+```json
+{
+  "file_id": "fid_abc123",
+  "summary": "이 문서는 AI 기술에 관한 논문으로...",
+  "cached": false,
+  "log": ["load_pdf attempt 1 [120ms]", "..."]
+}
+```
+### 2. 채팅 요약 및 질의 (POST `/api/chat-summary`)
+- PDF Summary와 마찬가지로 `query`가 `SUMMARY_ALL` 인지 아닌지에 따라 요약, 또는 답변을 각각 `summary`, `answer` 필드에 출력합니다.
+- 요청 바디로 `chats` , `query` , `lang`, 필드를 전달합니다.
+- `chats`는 채팅 메시지 객체들의 배열이며, 각 객체는 `chat_id`, `plaintext` , `sender` , `timestamp` 필드를 포함해야 합니다.
 
-1. **시스템 패키지 설치**
-
-   * `redis-server`: 캐시 기능을 제공하는 인메모리 저장소
-
-2. **Python 가상환경 생성**
-
-   * Python 3.10+ 기반 `.venv` 가상환경을 생성하고 활성화합니다.
-
-3. **Python 패키지 설치**
-
-   * `pip install -r requirements.txt`를 통해 프로젝트에 필요한 모든 Python 라이브러리를 설치합니다.
-
-4. **환경변수 파일(.env) 생성**
-
-   * `.env` 파일이 자동 생성되며, 관리자가 선택 가능한 llm 와 embedding 모델
-/OPENAI API 키/Chroma/Redis 관련 설정을 포함합니다.
-
----
-
-### ✅ 3. Redis 및 Chroma 서버 실행
-
-백엔드에서 동작하는 Redis 캐시 서버와 Chroma 벡터 데이터베이스 서버를 실행합니다.
-이 단계는 요약 요청 시 내부적으로 필요한 **벡터 검색과 중복 요청 캐싱** 기능을 활성화합니다.
-
-#### 📌 실행 명령어
-
-```bash
-./start_services.sh
+- 요청 바디 예:
+```json
+{
+  "chats": [
+    {
+      "chat_id": "room1",
+      "plaintext": "오늘 회의 시작하겠습니다.",
+      "sender": "user1",
+      "timestamp": "2025-07-28T09:00:00"
+    }
+  ],
+  "query": "SUMMARY_ALL",
+  "lang": "ko"
+}
 ```
 
-#### 🛠️ 수행 작업
-
-1. **Redis 서버 실행**
-
-   * 백그라운드에서 Redis 서버를 실행합니다.
-   * 실행 확인: `redis-cli ping` → `PONG`이면 정상 작동
-
-2. **Chroma DB 실행**
-
-   * 벡터 저장소 역할을 하는 Chroma 서버를 포트 `9000`에서 실행합니다.
-   * 실행 확인: `curl http://localhost:9000/api/v2/heartbeat` → `{"nanosecond heartbeat": ...}`
-
-> Redis는 `127.0.0.1:6379`, Chroma는 `0.0.0.0:9000`에서 서비스됩니다.
-
----
-
-### ✅ 4. OpenAI API 키 등록 및 FastAPI 실행
-
-OpenAI의 GPT 모델을 호출하기 위해 API 키가 필요합니다.
-이 키를 .env파일로 부터 등록한 뒤 FastAPI 서버를 실행하면 
-`/summary` 및 `/ciat-summary` 등의 API가 활성화됩니다.
-
-#### 📌 실행 명령어
-
-```bash
-./run_api.sh
+- 응답 예:
+```json
+{
+  "summary": "오늘 회의에서는 프로젝트 일정에 대해 논의했습니다.",
+  "log": ["summarize:1", "translate:1"]
+}
+```
+### 3. 피드백 제출 (POST `/api/feedback`)
+- 서비스에 대한 만족도 평가를 제출용 엔드포인트로, 의무적으로 사용할 필요는 없습니다.
+  
+- 요청 예:
+```json
+{
+  "file_id": "fid_abc123",
+  "pdf_url": "https://example.com/sample.pdf",
+  "lang": "KO",
+  "rating": 5,
+  "comment": "정확하고 빠른 요약 감사합니다!",
+  "usage_log": ["load_pdf:1", "summary:1"]
+}
 ```
 
-#### 🛠️ 수행 작업
-
-1. **OpenAI API 키 입력**
-
-   * 사용자에게 키를 입력받아 `OPENAI_API_KEY` 환경 변수로 등록합니다.
-
-2. **FastAPI 서버 실행**
-
-   * 포트 `8000`에서 FastAPI 서버를 `--reload` 모드로 실행합니다.
-   * 자동 문서화: [http://localhost:8000/docs](http://localhost:8000/docs) 접속 가능
-
-#### 💡 결과
-
-* 로컬에서 `POST /summary`, `POST /chat-summary` 등 API를 사용할 수 있게 됩니다.
-* `.venv` 가상환경이 자동 활성화된 상태에서 서버가 실행됩니다.
-
----
-
-### ✅ 5. 서버 종료
-
-Redis, Chroma, FastAPI 서버가 백그라운드 혹은 터미널에서 실행되고 있다면, 이 명령어로 한 번에 모두 종료할 수 있습니다.
-
-#### 📌 실행 명령어
-
-```bash
-./stop_services.sh
+- 응답 예:
+```json
+{
+  "id": "fb_123e4567-e89b-12d3-a456-426614174000",
+  "created_at": "2025-07-28T02:15:30.123456",
+  "ok": true
+}
 ```
 
-#### 🛠️ 수행 작업
+## IV. Structure
+___
 
-1. **현재 열린 포트 확인**
-
-   * `lsof -i :6379`, `:9000`, `:8000` 포트를 통해 Redis, Chroma, API 서버 PID 확인
-
-2. **프로세스 종료**
-
-   * 각 포트를 사용하는 PID를 `kill` 명령으로 안전하게 종료합니다.
-
-#### ✅ 효과
-
-* 모든 서버 리소스가 해제되어 재시작 시 충돌 없음
-* Chroma가 다시 실행될 때 동일한 `/chroma_db` 경로로 복원 가능
-* Redis는 다시 시작 시 TTL 설정에 따라 캐시 재사용 가능
-
----
-### ✅ 6. 전체 통합 실행 스크립트
-
-한 번의 명령어로 전체 실행 과정을 자동화하고 싶다면 다음 스크립트를 사용할 수 있습니다.
-
-#### 📌 실행 명령어
-
-```bash
-./run_all.sh
-
+- 서비스의 전반적이 구조는 아래와 같습니다.
+```
+.
+├── run_all.sh, run_vllm.sh       # 실행 스크립트
+├── setup_env.sh                  # 환경 변수 설정
+├── scripts/                      # 실행/종료 스크립트 모음
+└── app/                          # 애플리케이션 루트
+    ├── controller/               # HTTP 요청 라우팅 및 엔드포인트 핸들러
+    ├── dto/                      # 요청/응답용 데이터 클래스
+    ├── service/                  # LangGraph 기반 서비스 로직
+    ├── domain/                   # 인터페이스 정의
+    ├── infra/                    # 인터페이스 구현체
+    ├── cache/, vectordb/         # 저장 계층
+    │
+	├── main.py                   # FastAPI 진입점
+    └── prompts.py                # 프롬프트 문자열 모음
+```
