@@ -21,6 +21,8 @@ from app.prompts import (
     PROMPT_VERIFY,
     PROMPT_REFINE,
     PROMPT_TRANSLATE,
+    PROMPT_FILTER_QUERY,
+    PROMPT_TRANSLATE_AND_REFINE_QUERY,
 )
 
 from app.domain.interfaces import (
@@ -55,8 +57,6 @@ class SummaryState(BaseModel):
     
     is_web: Optional[bool] = None
     is_good: Optional[bool] = None
-
-    refine_count: int = 0
 
 # ---------------------------------------------------------------------------
 # Helper: safe-retry decorator
@@ -158,8 +158,8 @@ class SummaryGraphBuilder:
             if st.is_summary:
                 if st.cached:
                     return "translate"
-                return "RAG_router" if st.embedded else "load"
-            return "RAG_router" if st.embedded else "load"
+                return "filter_query" if st.embedded else "load"
+            return "filter_query" if st.embedded else "load"
 
         g.add_node("entry", entry_router)
 
@@ -218,6 +218,46 @@ class SummaryGraphBuilder:
         g.add_node("summarize", summarize)
 
         # 3-Q. Retrieve -------------------------------------------------
+        @safe_retry
+        async def filter_query(st: SummaryState):
+            """프롬프트를 파괴할 수 있는 쿼리문을 정제하고,
+            영어로 쿼리를 번역한 뒤
+            문서의 구조를 묻는 쿼리의 경우 구체적인 쿼리문으로 변경한다.
+            
+            Args:
+                st: 현재 요청 상태.
+            """
+            
+            if st.query == "SUMMARY_ALL":
+                return st
+            
+            prompt = PROMPT_FILTER_QUERY.render(query=st.query)
+            result = await self.llm.execute(prompt)
+            if "yes" in result.lower():
+                st.answer = "Security Notice: Your query was flagged as a potential attempt to override system behavior. Please refrain from such actions. Repeated attempts may lead to access restrictions."
+            else:
+                prompt = PROMPT_TRANSLATE_AND_REFINE_QUERY.render(query=st.query)
+                result = await self.llm.execute(prompt)
+                st.query = result
+            return st
+        
+        g.add_node("filter_query", filter_query)
+        
+        def post_filter_query(st: SummaryState) -> str:
+            if st.error:
+                return "finish"
+            if st.answer == "Security Notice: Your query was flagged as a potential attempt to override system behavior. Please refrain from such actions. Repeated attempts may lead to access restrictions.":
+                return "translate"
+            else:
+                return "RAG_router"
+        
+        g.add_conditional_edges("filter_query", post_filter_query, {
+            "RAG_router": "RAG_router",
+            "translate": "translate",
+            "finish": "finish",
+        })
+        
+        
         @safe_retry
         async def RAG_router(st: SummaryState):
             """RAG를 시작하기 전 어떻게 처리할지 LLM을 통해 결정한다.
@@ -383,92 +423,9 @@ class SummaryGraphBuilder:
         g.add_node("generate", generate)
         
         def post_generate(st: SummaryState) -> str:
-            return "finish" if st.error else "verify"
+            return "finish" if st.error else "translate"
         
         g.add_conditional_edges("generate", post_generate, {
-            "verify": "verify",
-            "finish": "finish",
-        })
-        
-        @safe_retry
-        async def verify(st: SummaryState):
-            """생성된 답변이 쿼리에 대한 적절한 답변인지 판별하고, 관련 없는 경우 리파인 프로세스를 진행한다.
-
-            Args:
-                st: 현재 요청 상태.
-
-            Returns:
-                리파인 프로세스가 진행된 상태 객체.(st.query)
-            """
-            
-            prompt = PROMPT_VERIFY.render(
-                query=st.query,
-                summary=st.summary,
-                retrieved=st.retrieved,
-                answer=st.answer,
-            )
-            result = await self.llm.execute(prompt, think=True)
-            st.is_good = "good" in result.lower()
-            return st
-        
-        g.add_node("verify", verify)
-        
-        def post_verify(st: SummaryState) -> str:
-            if st.error:
-                return "finish"
-            if not st.is_good:
-                return "refine"
-            return "save" if st.is_summary else "translate"
-        
-        g.add_conditional_edges("verify", post_verify, {
-            "save": "save",
-            "refine": "refine",
-            "finish": "finish",
-            "translate": "translate",
-        })
-        
-        @safe_retry
-        async def refine(st: SummaryState):
-            """쿼리문을 개선하여 더 정확한 답변을 얻기 위한 작업을을 진행한다.
-            이 작업은은 최대 3회 진행된다.
-
-            Args:
-                st: 현재 요청 상태.
-
-            Returns:
-                개선된 쿼리문 및 개선 횟수가 추가된 상태 객체.(st.query, st.refine_count)
-            """
-            st.refine_count += 1
-            if st.refine_count > 3:
-                st.answer = "I'm sorry, I can't find the answer to your question even though I read all the documents. Please ask a question about the document's content."
-                return st
-            
-            prompt = PROMPT_REFINE.render(
-                summary=st.summary,
-                query=st.query,
-                retrieved=st.retrieved,
-                answer=st.answer
-            )
-            result = await self.llm.execute(prompt)
-            # 관련 없는 경우
-            if "not related to the document content" in result:
-                st.answer = result
-                return st
-            # 관련 있는 경우(리파인된 쿼리 반환)
-            st.query = result
-            return st
-        
-        g.add_node("refine", refine)
-        
-        def post_refine(st: SummaryState) -> str:
-            if st.error:
-                return "finish"
-            if "not related to the document content" in st.answer or st.refine_count > 3:
-                return "translate"
-            else:
-                return "RAG_router"
-        g.add_conditional_edges("refine", post_refine, {
-            "RAG_router": "RAG_router",
             "translate": "translate",
             "finish": "finish",
         })
@@ -541,7 +498,7 @@ class SummaryGraphBuilder:
 
         g.add_conditional_edges("entry", entry_branch, {
             "translate": "translate",
-            "RAG_router":  "RAG_router",
+            "filter_query":  "filter_query",
             "load":      "load",
             "finish":    "finish",
         })
@@ -555,10 +512,10 @@ class SummaryGraphBuilder:
         })
 
         def post_embed(st: SummaryState) -> str:
-            return "finish" if st.error else "RAG_router"
+            return "finish" if st.error else "filter_query"
 
         g.add_conditional_edges("embed", post_embed, {
-            "RAG_router":  "RAG_router",
+            "filter_query":  "filter_query",
             "finish":    "finish",
         })
 
