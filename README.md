@@ -72,20 +72,20 @@ ___
 -  요청 바디 예문:
 ```json
 {
-  "file_id": "fid_abc123",
-  "pdf_url": "https://example.com/sample.pdf",
-  "query": "SUMMARY_ALL",
-  "lang": "KO"
+  "file_id": "fid_abc123",
+  "pdf_url": "https://example.com/sample.pdf",
+  "query": "SUMMARY_ALL",
+  "lang": "KO"
 }
 ```
 
 - 응답 바디 예문:
 ```json
 {
-  "file_id": "fid_abc123",
-  "summary": "이 문서는 AI 기술에 관한 논문으로...",
-  "cached": false,
-  "log": ["load_pdf attempt 1 [120ms]", "..."]
+  "file_id": "fid_abc123",
+  "summary": "이 문서는 AI 기술에 관한 논문으로...",
+  "cached": false,
+  "log": ["load_pdf attempt 1 [120ms]", "..."]
 }
 ```
 ### 2. 채팅 요약 및 질의 (POST `/api/chat-summary`)
@@ -93,50 +93,50 @@ ___
 - 요청 바디로 `chats` , `query` , `lang`, 필드를 전달합니다.
 - `chats`는 채팅 메시지 객체들의 배열이며, 각 객체는 `chat_id`, `plaintext` , `sender` , `timestamp` 필드를 포함해야 합니다.
 
-- 요청 바디 예:
+- 요청 바디 예문:
 ```json
 {
-  "chats": [
-    {
-      "chat_id": "room1",
-      "plaintext": "오늘 회의 시작하겠습니다.",
-      "sender": "user1",
-      "timestamp": "2025-07-28T09:00:00"
-    }
-  ],
-  "query": "SUMMARY_ALL",
-  "lang": "ko"
+  "chats": [
+    {
+      "chat_id": "room1",
+      "plaintext": "오늘 회의 시작하겠습니다.",
+      "sender": "user1",
+      "timestamp": "2025-07-28T09:00:00"
+    }
+  ],
+  "query": "SUMMARY_ALL",
+  "lang": "ko"
 }
 ```
 
-- 응답 예:
+- 응답 바디 예문:
 ```json
 {
-  "summary": "오늘 회의에서는 프로젝트 일정에 대해 논의했습니다.",
-  "log": ["summarize:1", "translate:1"]
+  "summary": "오늘 회의에서는 프로젝트 일정에 대해 논의했습니다.",
+  "log": ["summarize:1", "translate:1"]
 }
 ```
 ### 3. 피드백 제출 (POST `/api/feedback`)
 - 서비스에 대한 만족도 평가를 제출용 엔드포인트로, 의무적으로 사용할 필요는 없습니다.
   
-- 요청 예:
+- 요청 바디 예문:
 ```json
 {
-  "file_id": "fid_abc123",
-  "pdf_url": "https://example.com/sample.pdf",
-  "lang": "KO",
-  "rating": 5,
-  "comment": "정확하고 빠른 요약 감사합니다!",
-  "usage_log": ["load_pdf:1", "summary:1"]
+  "file_id": "fid_abc123",
+  "pdf_url": "https://example.com/sample.pdf",
+  "lang": "KO",
+  "rating": 5,
+  "comment": "정확하고 빠른 요약 감사합니다!",
+  "usage_log": ["load_pdf:1", "summary:1"]
 }
 ```
 
-- 응답 예:
+- 응답 바디 예문문:
 ```json
 {
-  "id": "fb_123e4567-e89b-12d3-a456-426614174000",
-  "created_at": "2025-07-28T02:15:30.123456",
-  "ok": true
+  "id": "fb_123e4567-e89b-12d3-a456-426614174000",
+  "created_at": "2025-07-28T02:15:30.123456",
+  "ok": true
 }
 ```
 
