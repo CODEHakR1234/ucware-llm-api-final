@@ -157,6 +157,6 @@ ___
     ├── infra/                    # 인터페이스 구현체
     ├── cache/, vectordb/         # 저장 계층
     │
-	├── main.py                   # FastAPI 진입점
+	  ├── main.py                   # FastAPI 진입점
     └── prompts.py                # 프롬프트 문자열 모음
 ```
