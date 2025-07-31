@@ -3,7 +3,6 @@
 import asyncio
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from app.controller import (
     pdf_summary_controller,
     chat_summary_controller,
@@ -33,5 +32,3 @@ app.include_router(pdf_summary_controller.router)
 app.include_router(chat_summary_controller.router)
 app.include_router(feedback_controller.router)
 app.include_router(pdf_tutorial_controller.router)
-
-app.mount("/static", StaticFiles(directory="static"), name="static")

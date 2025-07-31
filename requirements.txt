@@ -41,6 +41,7 @@ Jinja2>=3.0
 scipy>=1.11
 # ───────── SmolDocling & Docling ─────────
 docling>=0.6.0
+mlx-vlm>=0.1.0  # SmolDocling MLX 모델용
 
 # ───────── Tavily Search API ─────────
 tavily-python

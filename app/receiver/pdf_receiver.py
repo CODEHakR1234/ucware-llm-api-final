@@ -14,9 +14,10 @@ import asyncio, base64, re
 from typing import Final, List, Tuple
 import httpx
 
-from docling import DocumentConverter, VlmPipeline
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
 from docling.pipeline.vlm_pipeline import VlmPipeline
+from docling.datamodel.pipeline_options import VlmPipelineOptions
 from docling.datamodel import vlm_model_specs
 
 from app.domain.page_element import PageElement
@@ -26,12 +27,15 @@ _TIMEOUT = httpx.Timeout(30.0)
 _IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 # ──────────────── Docling 설정 ────────────────
+# SmolDocling 기본 모델 사용
 _converter = DocumentConverter(
-    vlm_pipeline=VlmPipeline(
-        model="SMOLDOCLING_PREVIEW",
-        embed_images=True
-    )
+    format_options={
+        InputFormat.PDF: PdfFormatOption(
+            pipeline_cls=VlmPipeline
+        )
+    }
 )
+print("[PDFReceiver] SmolDocling 기본 모델 초기화 완료", flush=True)
 
 class PDFReceiver:
     """
@@ -50,9 +54,9 @@ class PDFReceiver:
         """
         try:
             print(f"[PDFReceiver] PDF 변환 시작: {url}", flush=True)
-            # Docling으로 PDF → Markdown 변환
-            doc = await _converter.convert(source=url)
-            markdown_content = doc.document.export_to_markdown()
+            # Docling으로 PDF → Markdown 변환 (올바른 호출 방법)
+            doc = _converter.convert(source=url).document
+            markdown_content = doc.export_to_markdown()
             print(f"[PDFReceiver] PDF 변환 완료: {len(markdown_content)}자", flush=True)
             
             # SmolDocling 페이지 구분자로 분할
@@ -61,8 +65,6 @@ class PDFReceiver:
                 pages = markdown_content.split("<page_break>")
             elif "\f" in markdown_content:  # form feed character
                 pages = markdown_content.split("\f")
-            elif "\n---\n" in markdown_content:  # fallback
-                pages = markdown_content.split("\n---\n")
             else:
                 # 페이지 구분자가 없으면 전체를 하나의 페이지로
                 pages = [markdown_content]

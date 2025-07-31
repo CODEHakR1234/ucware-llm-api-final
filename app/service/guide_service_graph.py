@@ -31,7 +31,7 @@ class GuideServiceGraph:
         Returns:
             튜토리얼 생성 결과 딕셔너리.
         """
-        st: GuideState = await self.graph.ainvoke(
+        result = await self.graph.ainvoke(
             GuideState(
                 file_id=file_id, 
                 url=pdf_url, 
@@ -39,13 +39,20 @@ class GuideServiceGraph:
             ),
             config={"recursion_limit": 80},
         )
-        return {
+        
+        # summary_service_graph.py와 동일한 방식으로 반환
+        body = {
             "file_id": file_id,
-            "tutorial": st.tutorial,
-            "cached": st.cached,
-            "log": st.log,
-            "error": st.error,
+            "cached": result.get("cached", False),
+            "log": result.get("log", []),
         }
+        
+        if result.get("error"):
+            body["error"] = result["error"]
+            return body
+            
+        body["tutorial"] = result.get("tutorial")
+        return body
 
 # 싱글턴 인스턴스
 _singleton = GuideServiceGraph()
