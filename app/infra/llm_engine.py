@@ -37,7 +37,6 @@ You are a helpful assistant that summarizes the following text.
 
 Please summarize the text in a concise manner.
 
-/no_think
 """
 
 COMBINE_PROMPT = """
@@ -47,7 +46,6 @@ You are a helpful assistant that combines the following summaries.
 
 Please combine the summaries in a concise manner.
 
-/no_think
 """
 
 # ───────────────────── LLM 엔진 구현체 ─────────────────────
@@ -65,8 +63,17 @@ class LlmEngine(LlmChainIF):
     def __init__(self, *, temperature: float = 0.7):
         # Shared LLM instance
         self.llm = get_llm_instance(temperature=temperature)
-        self.map_prompt = PromptTemplate(template=MAP_PROMPT, input_variables=["text"])
-        self.combine_prompt = PromptTemplate(template=COMBINE_PROMPT, input_variables=["text"])
+        self.map_prompt = MAP_PROMPT
+        self.combine_prompt = COMBINE_PROMPT
+        
+        # Qwen 모델인 경우 추론 과정을 출력하지 않는 /no_think를 프롬프트에에 추가
+        if "qwen" in self.llm.model_name.lower():
+            self.map_prompt += "/no_think"
+            self.combine_prompt += "/no_think"
+        
+        # map_reduce langchain 방식 요약 프롬프트 설정
+        self.map_prompt = PromptTemplate(template=self.map_prompt, input_variables=["text"])
+        self.combine_prompt = PromptTemplate(template=self.combine_prompt, input_variables=["text"])
 
         # LangChain Runnable 체인을 구성: 입력 문자열 그대로 전달 → LLM 실행 → 문자열로 파싱
         self._qa_chain = (
@@ -92,15 +99,16 @@ class LlmEngine(LlmChainIF):
 
         Args:
             prompt: 완성된 프롬프트 문자열.
-            think: /no_think 명령어 생략 여부.
+            think: /no_think 명령어 생략 여부.(Qwen 모델 한정, Qwen 모델은 /no_think 명령어를 통해 추론 과정을 출력하지 않게 할 수 있음)
 
         Returns:
             LLM 응답 문자열 (후처리 포함).
         """
-        if not think:
+        if not think and "qwen" in self.llm.model_name.lower():
             prompt = prompt + "/no_think"
         result = (await self._qa_chain.ainvoke(prompt)).strip()
-        # </think> 태그 제거: 시스템 메시지와 사용자 응답 분리 목적으로 삽입된 내용을 후처리로 제거
+        
+        # </think> 태그 내부 내용 제거 (Qwen 모델의 추론 부분)
         if "</think>" in result:
             result = re.sub(r'<think>.*?</think>', '', result, flags=re.DOTALL).strip()
         return result

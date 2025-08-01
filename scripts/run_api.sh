@@ -47,15 +47,31 @@ echo "[✅] Chroma 서버 연결 성공!"
 echo "[🚀] FastAPI 서버를 포트 $PORT 에서 실행 중..."
 nohup uvicorn app.main:app --host 0.0.0.0 --port $PORT > fastapi.log 2>&1 &
 
-sleep 5
-
 # ───────────────────────────────
 # [5] 서버 기동 확인
 # ───────────────────────────────
-if lsof -i :$PORT | grep LISTEN; then
-  echo "✅ FastAPI 서버가 포트 $PORT 에서 정상적으로 실행되었습니다."
-else
-  echo "❌ FastAPI 서버가 포트 $PORT 에서 실행되지 않았습니다."
+echo "[🔄] FastAPI 서버 시작 확인 중..."
+
+MAX_RETRIES=30
+RETRY_INTERVAL=2
+COUNTER=0
+
+while [ $COUNTER -lt $MAX_RETRIES ]; do
+  ((COUNTER++))
+  
+  # 포트 리스닝 확인
+  if lsof -i :$PORT | grep LISTEN > /dev/null; then
+    echo "✅ FastAPI 서버가 포트 $PORT 에서 정상적으로 실행되었습니다!"
+    break
+  else
+    sleep $RETRY_INTERVAL
+  fi
+done
+
+# 최대 재시도 횟수 초과 시 에러
+if [ $COUNTER -ge $MAX_RETRIES ]; then
+  echo "❌ FastAPI 서버가 $MAX_RETRIES 초 내에 시작되지 않았습니다."
+  echo "📋 로그 확인: tail -f fastapi.log"
   exit 1
 fi
 

@@ -10,6 +10,7 @@ import time
 import asyncio
 from functools import wraps
 from typing import Awaitable, Callable, List, Optional
+import os
 
 from langgraph.graph import StateGraph
 from pydantic import BaseModel, Field 
@@ -228,15 +229,21 @@ class SummaryGraphBuilder:
                 st: 현재 요청 상태.
             """
             
+            # 쿼리가 SUMMARY_ALL인 경우 전체 요약 모드이므로 정제 과정정 생략.
             if st.query == "SUMMARY_ALL":
                 return st
             
-            prompt = PROMPT_FILTER_QUERY.render(query=st.query)
+            # 쿼리가 프롬프트를 파괴할 수 있는 쿼리인지 판단.
+            prompt = PROMPT_FILTER_QUERY.render(query=st.query,think=True)
             result = await self.llm.execute(prompt)
+            
+            # 프롬프트를 파괴할 수 있는 쿼리인 경우 경고 메시지 반환.
             if "yes" in result.lower():
                 st.answer = "Security Notice: Your query was flagged as a potential attempt to override system behavior. Please refrain from such actions. Repeated attempts may lead to access restrictions."
             else:
-                prompt = PROMPT_TRANSLATE_AND_REFINE_QUERY.render(query=st.query)
+                
+                # 프롬프트를 파괴하지 않는는 쿼리인 경우 쿼리를 번역하고 구체적인 쿼리문으로 변경.
+                prompt = PROMPT_TRANSLATE_AND_REFINE_QUERY.render(query=st.query,think=True)
                 result = await self.llm.execute(prompt)
                 st.query = result
             return st
@@ -278,7 +285,11 @@ class SummaryGraphBuilder:
             else:
                 st.chunks = await self.store.get_all(st.file_id)
                 st.summary = await self.llm.summarize(st.chunks)
-                
+            
+            if os.getenv("TAVILY_API_KEY") == "":
+                st.is_web = False
+                return st
+            
             prompt = PROMPT_DETERMINE_WEB.render(query=st.query, summary=st.summary)
             result = await self.llm.execute(prompt, think=True)
             st.is_web = "true" in result.lower()
@@ -319,7 +330,6 @@ class SummaryGraphBuilder:
             search_result, vector_result = await asyncio.gather(search_task, vector_task)
             
             st.retrieved = vector_result + search_result
-            st.log.append(f"retrieved: {search_result}")
             
             return st
         

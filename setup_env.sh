@@ -19,7 +19,8 @@ echo "1. openai"
 echo "2. hf (HuggingFace)"
 read -p "선택 [1/2]: " PROVIDER_CHOICE
 
-echo "🔑 Tavily API Key를 입력하세요: "
+
+echo "🔑 Tavily API Key를 입력하세요 (Web Search 미사용시 비워두세요): "
 read -r TAVILY_API_KEY
 
 if [ "$PROVIDER_CHOICE" == "2" ]; then

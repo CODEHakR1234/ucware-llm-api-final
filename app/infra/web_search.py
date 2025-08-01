@@ -51,5 +51,4 @@ class WebSearch(WebSearchIF):
 
             # 텍스트만 추출하여 리스트에 추가
             chunks.extend(doc.page_content for doc in docs)
-        print(chunks)
         return chunks
