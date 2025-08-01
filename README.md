@@ -1,7 +1,7 @@
 
 # UCWARE LLM API  
 ___
-UCWARE LLM API는 PDF 문서 및 채팅 기록에 대한 요약 / 질의응답 기능을 제공하는 서비스입니다.
+UCWARE LLM API는 PDF 문서 및 채팅 기록에 대한 요약 및 질의응답 기능을 제공하는 서비스입니다.
 
 ## I. Features
 ___
