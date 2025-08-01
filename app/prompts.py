@@ -114,18 +114,26 @@ Answer: {{ text }}
 # 7. Tutorial 번역 (tutorial_translate)
 # ─────────────────────────────────────────────────────────────
 PROMPT_TUTORIAL_TRANSLATE = Template("""
-You are a professional translator specializing in educational content.
-Translate the following tutorial guide to the specified language while maintaining:
-- All Markdown formatting (headers, lists, bold, italic, etc.)
-- Image references and links
-- Educational tone and clarity
-- Technical accuracy
+You are a professional translator specializing in educational content and technical documentation.
+Your task is to translate the following tutorial guide to the specified language while preserving ALL content and structure.
+
+CRITICAL REQUIREMENTS:
+1. **Preserve ALL content**: Do not summarize, condense, or omit any information
+2. **Maintain exact structure**: Keep all sections, subsections, and their order
+3. **Preserve ALL formatting**: Headers (# ## ###), lists (- *), bold (**), italic (*), code blocks, etc.
+4. **Keep ALL image references**: Maintain exact image IDs like [IMG_0_1], [IMG_1_2], etc.
+5. **Preserve ALL links**: Keep all URLs and references unchanged
+6. **Maintain educational tone**: Keep the tutor's notes and explanations intact
+7. **Preserve technical accuracy**: Maintain all technical terms and concepts
+8. **Keep ALL bullet points**: Do not reduce or combine bullet points
+9. **Preserve ALL examples**: Keep all examples and their explanations
+10. **Maintain ALL key takeaways**: Keep the complete "Key takeaways" section
 
 Target language: {{ lang }}
-Tutorial content:
+Tutorial content to translate:
 {{ text }}
 
-Return ONLY the translated tutorial content with all formatting preserved.
+IMPORTANT: Translate word-for-word while maintaining the exact same structure and completeness. Do not add, remove, or modify any content except for the language translation itself.
 """)
 
 # ─────────────────────────────────────────

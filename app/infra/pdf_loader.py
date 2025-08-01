@@ -10,9 +10,16 @@ from app.domain.page_element import PageElement
 from app.vision.captioner import Captioner
 
 # ──────────────── 싱글턴 ────────────────
-_receiver = PDFReceiver()
+_receiver = None  # 지연 초기화
 _captioner = Captioner()
 _chunker = SemanticChunker()
+
+def get_pdf_receiver():
+    """PDFReceiver 싱글턴을 반환한다."""
+    global _receiver
+    if _receiver is None:
+        _receiver = PDFReceiver()
+    return _receiver
 
 class PdfLoader(PdfLoaderIF):
     """
@@ -43,7 +50,8 @@ class PdfLoader(PdfLoaderIF):
             with_figures=False: 문자열 리스트
         """
         # (1) PDF → PageElement 추출
-        elements: List[PageElement] = await _receiver.fetch_and_extract_elements(url)
+        receiver = get_pdf_receiver()
+        elements: List[PageElement] = await receiver.fetch_and_extract_elements(url)
 
         # (2) 자습서 모드: 캡션 생성 + data-URI 변환
         if with_figures:
