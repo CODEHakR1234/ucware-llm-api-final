@@ -14,12 +14,13 @@ app = FastAPI(title="Multi-Summary API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[               # 프론트 오리진 **정확히** 넣기
-        "http://192.168.0.173:3000",
-        "http://172.16.10.117:3000",
-        "http://localhost:3000",
-        "https://proxy3.aitrain.ktcloud.com:10348",
-    ],
+    # allow_origins=[               # 프론트 오리진 **정확히** 넣기
+    #     "http://192.168.0.173:3000",
+    #     "http://172.16.10.117:3000",
+    #     "http://localhost:3000",
+    #     "https://proxy3.aitrain.ktcloud.com:10348",
+    # ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],          # OPTIONS 포함
     allow_headers=["*"],

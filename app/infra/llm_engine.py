@@ -127,6 +127,9 @@ class LlmEngine(LlmChainIF):
         # ``ainvoke`` returns the final summary string when
         # ``return_intermediate_steps=False``.
         result = await self._summ_chain.ainvoke({"input_documents": lc_docs})
-
+        
+        # Qwen 모델의 추론 부분 제거
+        if "</think>" in result["output_text"]:
+            result["output_text"] = re.sub(r'<think>.*?</think>', '', result["output_text"], flags=re.DOTALL).strip()
         return str(result["output_text"]).strip()
 

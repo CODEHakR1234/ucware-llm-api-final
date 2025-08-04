@@ -234,8 +234,8 @@ class SummaryGraphBuilder:
                 return st
             
             # 쿼리가 프롬프트를 파괴할 수 있는 쿼리인지 판단.
-            prompt = PROMPT_FILTER_QUERY.render(query=st.query,think=True)
-            result = await self.llm.execute(prompt)
+            prompt = PROMPT_FILTER_QUERY.render(query=st.query)
+            result = await self.llm.execute(prompt, think=True)
             
             # 프롬프트를 파괴할 수 있는 쿼리인 경우 경고 메시지 반환.
             if "yes" in result.lower():
@@ -243,8 +243,8 @@ class SummaryGraphBuilder:
             else:
                 
                 # 프롬프트를 파괴하지 않는는 쿼리인 경우 쿼리를 번역하고 구체적인 쿼리문으로 변경.
-                prompt = PROMPT_TRANSLATE_AND_REFINE_QUERY.render(query=st.query,think=True)
-                result = await self.llm.execute(prompt)
+                prompt = PROMPT_TRANSLATE_AND_REFINE_QUERY.render(query=st.query)
+                result = await self.llm.execute(prompt, think=True)
                 st.query = result
             return st
         
@@ -474,12 +474,17 @@ class SummaryGraphBuilder:
                 text = self.cache.get_summary(st.file_id)
             else:
                 text = st.answer
-
+            
+            # 사용자 언어가 영어일 경우 번역은 필요 없으므로 생략
+            if st.lang == "EN":
+                st.answer = text
+                return st
+            
             prompt = PROMPT_TRANSLATE.render(lang=st.lang, text=text)
             st.answer = await self.llm.execute(prompt)
             return st
 
-
+        
         # 6. Translate & finish ----------------------------------------
         g.add_node("translate", translate)
         async def finish_node(st: SummaryState):

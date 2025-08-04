@@ -103,11 +103,17 @@ Generated Answer: {{ answer }}
 # 6. 번역 (translate)
 # ─────────────────────────────────────────────────────────────
 PROMPT_TRANSLATE = Template("""
-You are a helpful assistant that can translate the answer to User language.
-EN is English, KR is Korean.
-ONLY RETURN THE TRANSLATED SEQUENCE, NOTHING ELSE.
-User language: {{ lang }}
+You are a helpful assistant that translates answers into the user's preferred language.
+ONLY RETURN THE FINAL OUTPUT TEXT. NO EXPLANATION.
+
+{% if lang.upper() == "EN" %}
+The answer is already in English. Do not translate it. Just return it as-is:
 Answer: {{ text }}
+{% else %}
+Please translate the following answer to the target language.
+Target Language: {{ lang }}
+Answer: {{ text }}
+{% endif %}
 """)
 
 # ─────────────────────────────────────────────────────────────
