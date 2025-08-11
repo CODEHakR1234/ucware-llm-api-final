@@ -121,7 +121,13 @@ CRITICAL REQUIREMENTS:
 1. **Preserve ALL content**: Do not summarize, condense, or omit any information
 2. **Maintain exact structure**: Keep all sections, subsections, and their order
 3. **Preserve ALL formatting**: Headers (# ## ###), lists (- *), bold (**), italic (*), code blocks, etc.
-4. **Keep ALL image references**: Maintain exact image IDs like [IMG_0_1], [IMG_1_2], etc.
+4. **STRICT IMAGE REFERENCE RULE**: 
+   - ONLY keep image references that EXACTLY match the original text
+   - DO NOT create, add, or modify any image references
+   - If you see [IMG_0_1] in original, keep [IMG_0_1] in translation
+   - If you see [IMG_1_2] in original, keep [IMG_1_2] in translation
+   - DO NOT create [IMG_2_3], [IMG_3_4], or any other image references
+   - If original has no images, output should have no images
 5. **Preserve ALL links**: Keep all URLs and references unchanged
 6. **Maintain educational tone**: Keep the tutor's notes and explanations intact
 7. **Preserve technical accuracy**: Maintain all technical terms and concepts
@@ -129,11 +135,21 @@ CRITICAL REQUIREMENTS:
 9. **Preserve ALL examples**: Keep all examples and their explanations
 10. **Maintain ALL key takeaways**: Keep the complete "Key takeaways" section
 
+ABSOLUTE FORBIDDEN ACTIONS:
+- ❌ DO NOT create new image references like [IMG_X_Y]
+- ❌ DO NOT add image references where none existed
+- ❌ DO NOT change existing image IDs
+- ❌ DO NOT mention images that don't exist in the original
+
 Target language: {{ lang }}
 Tutorial content to translate:
 {{ text }}
 
-IMPORTANT: Translate word-for-word while maintaining the exact same structure and completeness. Do not add, remove, or modify any content except for the language translation itself.
+IMPORTANT: 
+- Translate word-for-word while maintaining the exact same structure and completeness
+- Do not add, remove, or modify any content except for the language translation itself
+- Image references must be EXACTLY as they appear in the original text
+- If you are unsure about an image reference, DO NOT include it
 """)
 
 # ─────────────────────────────────────────
@@ -147,12 +163,23 @@ for a learner.
 Rules
 -----
 • Output in Markdown (H1~H3 headings).
-• When referencing images, use the format: [IMG_0_1], [IMG_1_2], etc. based on the [IMG_id:caption] format in the text. Use the exact image ID as shown in the text.
+• **STRICT IMAGE REFERENCE RULE**: 
+  - ONLY use image IDs that EXACTLY exist in the provided chunks
+  - If chunks contain [IMG_0_1], you can use [IMG_0_1]
+  - If chunks contain [IMG_1_2], you can use [IMG_1_2]
+  - DO NOT create new image IDs like [IMG_2_3], [IMG_3_4], etc.
+  - If no images exist in chunks, do not mention any images
 • Use the same image ID reference for the same image throughout your explanation.
 • After every Figure/Table image reference, add "**Tutor's note:** …" line explaining the image.
 • Keep each section ≤ 200 words if possible.
 • End with "Key takeaways" bulleted list.
 • Make sure to reference relevant images naturally within your explanations based on the image information provided.
+
+ABSOLUTE FORBIDDEN ACTIONS:
+- ❌ DO NOT create new image references like [IMG_X_Y]
+- ❌ DO NOT add image references where none existed in chunks
+- ❌ DO NOT change existing image IDs from chunks
+- ❌ DO NOT mention images that don't exist in the provided chunks
 
 Chunks:
 {{ chunks }}

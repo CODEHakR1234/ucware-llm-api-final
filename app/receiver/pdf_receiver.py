@@ -19,6 +19,7 @@ from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling.datamodel.pipeline_options import VlmPipelineOptions
+from docling.datamodel.image_ref_mode import ImageRefMode
 
 from app.domain.page_element import PageElement
 
@@ -58,7 +59,8 @@ try:
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_cls=VlmPipeline,
-                pipeline_options=pipeline_options
+                pipeline_options=pipeline_options,
+                embedding=True  # 이미지 추출 활성화
             )
         }
     )
@@ -129,11 +131,23 @@ class PDFReceiver:
             
             # Docling으로 PDF → Markdown 변환 (성능 최적화)
             doc = _converter.convert(source=url).document
-            markdown_content = doc.export_to_markdown()
+            markdown_content = doc.export_to_markdown(image_mode=ImageRefMode.EMBEDDED)
             
             end_time = time.perf_counter()
             processing_time = end_time - start_time
             print(f"[PDFReceiver] PDF 변환 완료: {len(markdown_content)}자 ({processing_time:.2f}초)", flush=True)
+            
+            # 디버깅: Markdown 내용에서 이미지 패턴 확인
+            img_patterns_in_markdown = list(_IMG_RE.findall(markdown_content))
+            print(f"[PDFReceiver] 전체 Markdown에서 찾은 이미지 패턴: {len(img_patterns_in_markdown)}개", flush=True)
+            for i, (alt, src) in enumerate(img_patterns_in_markdown[:5]):  # 처음 5개만 출력
+                print(f"[PDFReceiver]   전체 이미지 {i+1}: alt='{alt[:30]}...', src='{src[:50]}...'", flush=True)
+            
+            # 디버깅: Markdown 내용 일부 출력
+            print(f"[PDFReceiver] === Markdown 내용 미리보기 ===", flush=True)
+            markdown_preview = markdown_content[:500] + "..." if len(markdown_content) > 500 else markdown_content
+            print(f"[PDFReceiver] {markdown_preview}", flush=True)
+            print(f"[PDFReceiver] === Markdown 내용 끝 ===", flush=True)
             
             # GPU 메모리 사용량 모니터링
             if torch.cuda.is_available():
@@ -162,11 +176,20 @@ class PDFReceiver:
             if not pg_md.strip():
                 continue
 
-            # (1) 텍스트 처리 먼저 - [IMG_{page}_{id}] 플레이스홀더 유지
+            print(f"[PDFReceiver] 페이지 {idx} 처리 중: {len(pg_md)}자", flush=True)
+
+            # 원본 Markdown에서 이미지 패턴 찾기 (한 번만)
+            img_matches = list(_IMG_RE.findall(pg_md))
+            print(f"[PDFReceiver] 페이지 {idx}에서 찾은 이미지 패턴: {len(img_matches)}개", flush=True)
+            for i, (alt, src) in enumerate(img_matches):
+                print(f"[PDFReceiver]   이미지 {i+1}: alt='{alt[:50]}...', src='{src[:100]}...'", flush=True)
+
+            # (1) 텍스트 처리 - 이미지 매칭 결과를 사용하여 플레이스홀더 생성
             def _placeholder(m: re.Match) -> str:
                 nonlocal image_counter
                 img_id = f"IMG_{idx}_{image_counter}"
                 image_counter += 1
+                print(f"[PDFReceiver] 이미지 플레이스홀더 생성: {img_id}", flush=True)
                 return f"[{img_id}]"
 
             text_with_fig = _IMG_RE.sub(_placeholder, pg_md)
@@ -174,10 +197,13 @@ class PDFReceiver:
                 if para.strip():
                     elements.append(PageElement("text", idx, para.strip()))
 
-            # (2) 이미지 처리 - data-URI는 즉시 bytes로, remote는 수집
-            for alt, src in _IMG_RE.findall(pg_md):
+            # (2) 이미지 처리 - 이미 매칭된 결과 사용
+            image_counter = 1  # 카운터 리셋
+            for alt, src in img_matches:  # _IMG_RE.findall(pg_md) 대신 img_matches 사용
                 img_id = f"IMG_{idx}_{image_counter}"
                 image_counter += 1
+                
+                print(f"[PDFReceiver] 이미지 처리 중: {img_id}", flush=True)
                 
                 if src.startswith("data:image"):
                     # data-URI → bytes 변환
@@ -185,22 +211,29 @@ class PDFReceiver:
                     try:
                         img_bytes = base64.b64decode(b64)
                         elements.append(PageElement("figure", idx, img_bytes, caption=alt, id=img_id))
-                    except Exception:
+                        print(f"[PDFReceiver] data-URI 이미지 추가: {img_id} ({len(img_bytes)} bytes)", flush=True)
+                    except Exception as e:
+                        print(f"[PDFReceiver] data-URI 디코딩 실패: {img_id} - {e}", flush=True)
                         continue
                 else:
                     # remote URL은 나중에 다운로드
                     remote_imgs.append((idx, alt, src, img_id))
+                    print(f"[PDFReceiver] 원격 이미지 추가: {img_id} -> {src[:100]}...", flush=True)
 
         # (3) 원격 이미지 다운로드 (동시 8개 제한)
         if remote_imgs:
+            print(f"[PDFReceiver] 원격 이미지 다운로드 시작: {len(remote_imgs)}개", flush=True)
             sem = asyncio.Semaphore(8)
             
             async def _fetch(i: int, url: str):
                 async with sem:
                     try:
+                        print(f"[PDFReceiver] 이미지 다운로드 중: {url[:100]}...", flush=True)
                         r = await cli.get(url, follow_redirects=True)
+                        print(f"[PDFReceiver] 이미지 다운로드 성공: {url[:100]}... (상태: {r.status_code})", flush=True)
                         return i, r
                     except Exception as e:
+                        print(f"[PDFReceiver] 이미지 다운로드 실패: {url[:100]}... - {e}", flush=True)
                         return i, e
 
             async with httpx.AsyncClient(timeout=_TIMEOUT) as cli:
@@ -208,8 +241,12 @@ class PDFReceiver:
 
             for (pg_idx, alt, _, img_id), (i, r) in zip(remote_imgs, resps):
                 if isinstance(r, Exception) or r.status_code != 200:
+                    print(f"[PDFReceiver] 원격 이미지 처리 실패: {img_id} - {r}", flush=True)
                     continue
                 elements.append(PageElement("figure", pg_idx, r.content, caption=alt, id=img_id))
+                print(f"[PDFReceiver] 원격 이미지 추가: {img_id} ({len(r.content)} bytes)", flush=True)
+        else:
+            print(f"[PDFReceiver] 원격 이미지 없음", flush=True)
 
         if not elements:
             raise ValueError("Docling PDF 파싱 결과가 없습니다")
@@ -224,4 +261,26 @@ class PDFReceiver:
             del self._cache[oldest_key]
         
         print(f"[PDFReceiver] 요소 추출 완료: {len(elements)}개 (텍스트: {len([e for e in elements if e.kind == 'text'])}, 이미지: {len([e for e in elements if e.kind in ('figure', 'table', 'graph')])})", flush=True)
+        
+        # 디버깅: 각 요소의 상세 정보 출력
+        print(f"[PDFReceiver] === 요소 상세 정보 ===", flush=True)
+        for i, element in enumerate(elements[:10]):  # 처음 10개만 출력
+            print(f"[PDFReceiver] 요소 {i+1}:", flush=True)
+            print(f"  - kind: {element.kind}", flush=True)
+            print(f"  - page_no: {element.page_no}", flush=True)
+            print(f"  - id: {element.id}", flush=True)
+            if element.kind == "text":
+                content_preview = element.content[:100] + "..." if len(element.content) > 100 else element.content
+                print(f"  - content: {content_preview}", flush=True)
+            else:
+                content_type = type(element.content).__name__
+                content_size = len(element.content) if hasattr(element.content, '__len__') else "N/A"
+                print(f"  - content: {content_type} ({content_size})", flush=True)
+                print(f"  - caption: {element.caption}", flush=True)
+            print(f"  - ---", flush=True)
+        
+        if len(elements) > 10:
+            print(f"[PDFReceiver] ... (총 {len(elements)}개 요소 중 처음 10개만 표시)", flush=True)
+        
+        # 결과를 캐시에 저장
         return elements

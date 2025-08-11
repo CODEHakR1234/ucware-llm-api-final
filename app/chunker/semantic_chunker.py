@@ -19,8 +19,6 @@ _MD_HEADER = re.compile(r"^#{1,6}\s+.+")
 # bullets 그대로 유지 (시장점 필요)
 _BULLET = re.compile(r"^(\s*[\u2022\u2023\u25CF\-\*])|^\s*\d+\.\s+")
 _PAR_BR = re.compile(r"\n{2,}")
-# 플레이스홀더 패턴 추가
-_FIGURE_PLACEHOLDER = re.compile(r"\[FIGURE:([^\]]+)\]")
 
 # ─────────────────────────────────────────────────
 class SemanticChunker:

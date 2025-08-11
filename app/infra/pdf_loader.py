@@ -7,11 +7,11 @@ from app.domain.page_chunk import PageChunk
 from app.receiver.pdf_receiver import PDFReceiver
 from app.chunker.semantic_chunker import SemanticChunker
 from app.domain.page_element import PageElement
-from app.vision.captioner import Captioner
+from app.utils.captioner_factory import get_captioner_instance
 
 # ──────────────── 싱글턴 ────────────────
 _receiver = None  # 지연 초기화
-_captioner = Captioner()
+_captioner = get_captioner_instance()
 _chunker = SemanticChunker()
 
 def get_pdf_receiver():
@@ -66,8 +66,9 @@ class PdfLoader(PdfLoaderIF):
                     element.caption = caption or "No caption."
                     # bytes → base64 data-URI
                     if isinstance(element.content, (bytes, bytearray)):
+                        mime = self._detect_image_mime(element.content)
                         b64 = base64.b64encode(element.content).decode()
-                        data_uri = f"data:image/png;base64,{b64}"
+                        data_uri = f"data:{mime};base64,{b64}"
                         element.content = data_uri
 
         # (3) 청크 분할
@@ -122,4 +123,20 @@ class PdfLoader(PdfLoaderIF):
         for placeholder, replacement in replacements.items():
             text = text.replace(placeholder, replacement)
         return text
+
+    # ─────────────────────────────────────────────────────────
+    def _detect_image_mime(self, data: bytes) -> str:
+        """간단한 매직넘버로 MIME 추정. 기본값은 image/png."""
+        try:
+            if data.startswith(b"\x89PNG\r\n\x1a\n"):
+                return "image/png"
+            if data.startswith(b"\xff\xd8\xff"):
+                return "image/jpeg"
+            if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+                return "image/gif"
+            if data.startswith(b"RIFF") and b"WEBP" in data[:32]:
+                return "image/webp"
+        except Exception:
+            pass
+        return "image/png"
 
